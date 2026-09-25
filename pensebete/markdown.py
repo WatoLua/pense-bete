@@ -17,8 +17,11 @@ from PySide6.QtWidgets import QPlainTextEdit
 from . import tables
 
 HEADING = re.compile(r"^(#{1,6})(\s+)(.*)$")
-TASK = re.compile(r"^(\s*[-*+]\s+)\[([ xX])\](?=\s|$)")
-LIST_ITEM = re.compile(r"^(\s*)(?:([-*+])|(\d+)([.)]))(\s+)(\[[ xX]\]\s+)?")
+# A task's box: "[ ]" to do, "[v]" ok, "[x]" ko.
+TASK = re.compile(r"^(\s*[-*+]\s+)\[([ vVxX])\](?=\s|$)")
+LIST_ITEM = re.compile(r"^(\s*)(?:([-*+])|(\d+)([.)]))(\s+)(\[[ vVxX]\]\s+)?")
+# What a click on a box turns it into.
+NEXT_STATE = {" ": "v", "v": "x", "V": "x", "x": " ", "X": " "}
 QUOTE = re.compile(r"^(\s*>+)")
 FENCE = re.compile(r"^\s*(```|~~~)")
 # How long typing in a table pauses before its columns are aligned.
@@ -70,11 +73,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             font.setPixelSize(self.font_size)
             text_format.setFont(font, QTextCharFormat.FontPropertiesSpecifiedOnly)
             text_format.setFontFamilies(font.families())
-        elif kind == "done":
-            text_format.setFontStrikeOut(True)
-            done = QColor(self.text_color)
-            done.setAlpha(150)
-            text_format.setForeground(done)
+        elif kind in ("ok", "ko"):
+            # Dark on a light note, light on a dark one, as the text is.
+            light_note = self.text_color.lightness() < 128
+            colors = {"ok": ("#2e7d32", "#a5d6a7"), "ko": ("#c62828", "#ef9a9a")}[kind]
+            text_format.setForeground(QColor(colors[0] if light_note else colors[1]))
         return text_format
 
     def highlightBlock(self, text: str) -> None:
@@ -113,12 +116,13 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             self._merge(quote.end(), len(text), "italic")
         task = TASK.match(text)
         if task:
-            if task.group(2) in "xX":
-                self._merge(task.end(), len(text), "done")
             self._merge(task.start(1), task.end(1), "marker")
             # In a fixed font, "[ ]" is as wide as "[x]", and reads as a box.
             self._merge(task.end(1), task.end(), "code")
             self._merge(task.end(1), task.end(), "bold")
+            state = task.group(2).lower()
+            if state != " ":
+                self._merge(task.end(1), task.end(), "ok" if state == "v" else "ko")
         elif LIST_ITEM.match(text):
             item = LIST_ITEM.match(text)
             self._merge(len(item.group(1)), item.end(), "marker")
@@ -139,7 +143,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
 
 def checkbox_at(editor: QPlainTextEdit, position) -> tuple[QTextCursor, int] | None:
-    """The task checkbox under a point of the editor's viewport: its block's cursor and
+    """The task box under a point of the editor's viewport: its block's cursor and
     the offset of the character between the brackets."""
     cursor = editor.cursorForPosition(position)
     block = cursor.block()
@@ -158,13 +162,13 @@ def checkbox_at(editor: QPlainTextEdit, position) -> tuple[QTextCursor, int] | N
 
 
 def toggle_checkbox(block_cursor: QTextCursor, offset: int) -> None:
-    """Check or uncheck a task, as one step that undo can take back."""
+    """Turn a task's box to its next state, to do, ok, ko then to do again, as one step
+    that undo can take back."""
     block = block_cursor.block()
-    checked = block.text()[offset] in "xX"
     cursor = QTextCursor(block)
     cursor.setPosition(block.position() + offset)
     cursor.setPosition(block.position() + offset + 1, QTextCursor.KeepAnchor)
-    cursor.insertText(" " if checked else "x")
+    cursor.insertText(NEXT_STATE[block.text()[offset]])
 
 
 def continued_item(line: str) -> str | None:

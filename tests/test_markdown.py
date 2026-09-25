@@ -12,7 +12,7 @@ from pensebete.storage import Note
 
 @pytest.fixture
 def window(qtbot, store, answer_yes):
-    note = Note("a", "Title", content="# Heading\nsome **bold** text\n- [ ] task\n- [x] done")
+    note = Note("a", "Title", content="# Heading\nsome **bold** text\n- [ ] task\n- [x] failed\n- [v] passed")
     store.save(note, "Create note")
     window = NoteWindow(note, store)
     qtbot.addWidget(window)
@@ -64,7 +64,9 @@ def test_markdown_is_formatted_without_changing_the_text(qtbot, window, store):
     qtbot.wait(20)
 
     assert char_format(window, 1, 8).fontWeight() == QFont.Bold  # "bold"
-    assert char_format(window, 3, 8).fontStrikeOut()  # the checked task
+    assert char_format(window, 3, 3).foreground().color().name() == "#c62828"  # ko, in red
+    assert char_format(window, 4, 3).foreground().color().name() == "#2e7d32"  # ok, in green
+    assert char_format(window, 2, 3).foreground().color().name() != "#2e7d32"  # to do
     assert char_format(window, 0, 3).font().pixelSize() > 13  # the heading
     assert window.content_edit.toPlainText() == text
     assert not window.dirty
@@ -72,17 +74,16 @@ def test_markdown_is_formatted_without_changing_the_text(qtbot, window, store):
     assert commits(store.path / "a") == ["Create note"]
 
 
-def test_a_click_on_a_checkbox_toggles_it(window):
+def test_a_click_on_a_box_turns_it_ok_then_ko_then_to_do(window):
     window.set_markdown(True)
 
-    click(window, 2, 3)
-    assert window.content_edit.toPlainText().splitlines()[2] == "- [x] task"
-    click(window, 3, 3)
-    assert window.content_edit.toPlainText().splitlines()[3] == "- [ ] done"
+    for expected in ("- [v] task", "- [x] task", "- [ ] task"):
+        click(window, 2, 3)
+        assert window.content_edit.toPlainText().splitlines()[2] == expected
     assert window.dirty
 
     window.content_edit.undo()
-    assert window.content_edit.toPlainText().splitlines()[3] == "- [x] done"
+    assert window.content_edit.toPlainText().splitlines()[2] == "- [x] task"
 
 
 def test_checkboxes_do_not_toggle_in_plain_text(window):
@@ -93,12 +94,12 @@ def test_checkboxes_do_not_toggle_in_plain_text(window):
 
 def test_enter_continues_a_task_list_and_an_empty_item_ends_it(window):
     window.set_markdown(True)
-    end_of_line(window, 3)
+    end_of_line(window, 4)
 
     press_enter(window)
-    assert window.content_edit.toPlainText().endswith("- [x] done\n- [ ] ")
+    assert window.content_edit.toPlainText().endswith("- [v] passed\n- [ ] ")
     press_enter(window)
-    assert window.content_edit.toPlainText().endswith("- [x] done\n")
+    assert window.content_edit.toPlainText().endswith("- [v] passed\n")
 
 
 def test_a_table_is_aligned_once_the_cursor_leaves_it(window):
@@ -130,6 +131,7 @@ def test_align_table_keeps_the_alignment_colons_and_fills_missing_cells():
     ("  * nested", "  * "),
     ("3. third", "4. "),
     ("- [x] done", "- [ ] "),
+    ("- [v] ok", "- [ ] "),
     ("- ", ""),
     ("plain text", None),
 ])
