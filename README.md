@@ -47,9 +47,15 @@ From a clone of the repository, `./install.sh` does the same.
 
 ### Updating
 
-Run the installation command again; the notes are not touched.
+In the main window, open the **⋮** menu and choose **Update**: Pense-bête checks
+GitHub for a new version, installs it and offers to restart. Running the
+installation command again does the same. The notes are not touched.
+
+An application run from a git clone is updated with `git pull` instead.
 
 ### Uninstalling
+
+In the **⋮** menu, choose **Uninstall**, or run:
 
 ```sh
 ~/.local/opt/pense-bete/install.sh --uninstall

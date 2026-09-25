@@ -3,6 +3,7 @@
 #
 # Usage: ./install.sh [install-dir]   install (asks for the directory if not given)
 #        ./install.sh --uninstall     remove the application (notes are kept)
+#        --yes                        ask nothing, take the default answers
 #
 # Also runs on its own, without a clone of the repository:
 #   curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash
@@ -34,9 +35,10 @@ fail() { printf '\033[1;31m%s\033[0m %s\n' "$(t "Error:" "Erreur :")" "$*" >&2; 
 
 # Answers come from the terminal, since stdin is the script itself when piped into bash.
 # Without a terminal, the answer is empty and the default applies.
+# --yes (ASSUME_YES) skips the questions, for the application's own update and uninstall.
 ask() {  # ask "prompt" -> the answer
     local answer=""
-    if { exec 3</dev/tty; } 2>/dev/null; then
+    if [[ -z "$ASSUME_YES" ]] && { exec 3</dev/tty; } 2>/dev/null; then
         read -r -p "$1" answer <&3 || true
         exec 3<&-
     fi
@@ -117,6 +119,10 @@ install() {
         done
     fi
     chmod +x "$target/pense-bete" "$target/pense_bete.py" "$target/install.sh"
+    # The installed commit, which the application compares with the repository to offer updates.
+    if [[ ! -e "$target/.git" ]]; then
+        git -C "$SOURCE_DIR" rev-parse HEAD > "$target/.version" 2>/dev/null || rm -f -- "$target/.version"
+    fi
 
     info "$(t "Adding the entry to the applications menu" "Ajout de l'entrée dans le menu des applications")"
     mkdir -p -- "$(dirname "$DESKTOP_FILE")"
@@ -146,8 +152,19 @@ EOF
     echo "$(t "    To uninstall: $target/install.sh --uninstall" "    Désinstallation : $target/install.sh --uninstall")"
 }
 
-case "${1:-}" in
-    --uninstall) uninstall ;;
-    -h|--help) sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) install "${1:-}" ;;
+ACTION=install
+TARGET=""
+ASSUME_YES=""
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall) ACTION=uninstall ;;
+        -y|--yes) ASSUME_YES=1 ;;
+        -h|--help) ACTION=help ;;
+        *) TARGET="$arg" ;;
+    esac
+done
+case "$ACTION" in
+    uninstall) uninstall ;;
+    help) sed -n '2,6p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    install) install "$TARGET" ;;
 esac

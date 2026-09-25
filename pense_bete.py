@@ -10,11 +10,12 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTimer, QTranslator, Signal
+from PySide6.QtCore import QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,7 +37,11 @@ DATA_DIR = Path(
     os.environ.get("PENSE_BETE_DIR")
     or Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "pense-bete"
 )
-ICON_PATH = Path(__file__).resolve().parent / "icon.svg"
+APP_DIR = Path(__file__).resolve().parent
+ICON_PATH = APP_DIR / "icon.svg"
+# Written by install.sh: the installed commit of the repository.
+VERSION_FILE = APP_DIR / ".version"
+REPO_URL = os.environ.get("PENSE_BETE_REPO", "https://github.com/WatoLua/pense-bete.git")
 AUTOSAVE_DELAY_MS = 10_000
 DEFAULT_COLOR = "#fff59d"
 PALETTE = {
@@ -75,6 +80,25 @@ TRANSLATIONS = {
                       "fr": "Impossible de créer le post-it :\n{error}"},
     "delete_failed": {"en": "Could not delete the note:\n{error}",
                       "fr": "Échec de la suppression :\n{error}"},
+    "options": {"en": "Options", "fr": "Options"},
+    "update": {"en": "Update", "fr": "Mettre à jour"},
+    "uninstall": {"en": "Uninstall", "fr": "Désinstaller"},
+    "update_from_clone": {
+        "en": "Pense-bête runs from a git repository ({path}).\nUpdate it with git pull.",
+        "fr": "Pense-bête tourne depuis un dépôt git ({path}).\nMettez-le à jour avec git pull."},
+    "up_to_date": {"en": "Pense-bête is up to date.", "fr": "Pense-bête est à jour."},
+    "update_available": {"en": "A new version is available. Update now?",
+                         "fr": "Une nouvelle version est disponible. Mettre à jour maintenant ?"},
+    "update_failed": {"en": "The update failed:\n{error}", "fr": "La mise à jour a échoué :\n{error}"},
+    "update_done": {"en": "Pense-bête is updated. Restart it now?",
+                    "fr": "Pense-bête est mis à jour. Le redémarrer maintenant ?"},
+    "confirm_uninstall": {
+        "en": "Uninstall Pense-bête?\nYour notes are kept in {path}.",
+        "fr": "Désinstaller Pense-bête ?\nVos post-its sont conservés dans {path}."},
+    "uninstall_failed": {"en": "The uninstallation failed:\n{error}",
+                         "fr": "La désinstallation a échoué :\n{error}"},
+    "uninstalled": {"en": "Pense-bête is uninstalled. Your notes are kept in {path}.",
+                    "fr": "Pense-bête est désinstallé. Vos post-its sont conservés dans {path}."},
 }
 
 
@@ -87,6 +111,19 @@ def text_color_for(background: str) -> str:
     color = QColor(background)
     luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
     return "#000000" if luminance > 140 else "#ffffff"
+
+
+def run_command(*args: str) -> subprocess.CompletedProcess:
+    """Run a command with a busy cursor; its output is captured for error messages."""
+    QApplication.setOverrideCursor(Qt.WaitCursor)
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=300)
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
+def command_error(result: subprocess.CompletedProcess) -> str:
+    return (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
 
 
 def color_icon(color: str) -> QIcon:
@@ -296,9 +333,21 @@ class MainWindow(QWidget):
         delete_button = QPushButton(tr("delete"))
         delete_button.clicked.connect(self.delete_selected)
 
+        options_button = QToolButton()
+        options_button.setText("⋮")
+        options_button.setToolTip(tr("options"))
+        options_button.setPopupMode(QToolButton.InstantPopup)
+        options_button.setStyleSheet("QToolButton::menu-indicator { image: none; }")
+        options_button.setFixedSize(new_button.sizeHint().height(), new_button.sizeHint().height())
+        options_menu = QMenu(options_button)
+        options_menu.addAction(tr("update"), self.update_app)
+        options_menu.addAction(tr("uninstall"), self.uninstall_app)
+        options_button.setMenu(options_menu)
+
         buttons = QHBoxLayout()
         buttons.addWidget(new_button)
         buttons.addWidget(delete_button)
+        buttons.addWidget(options_button)
         layout = QVBoxLayout(self)
         layout.addWidget(self.list)
         layout.addLayout(buttons)
@@ -369,6 +418,58 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "Pense-bête", tr("delete_failed", error=error))
         self.notes.remove(note)
         self.refresh_list()
+
+    def save_all(self) -> None:
+        for window in self.windows.values():
+            window.save()
+
+    def update_app(self) -> None:
+        # A clone is the user's own checkout: overwriting its files would clobber their work.
+        if (APP_DIR / ".git").exists():
+            QMessageBox.information(self, "Pense-bête", tr("update_from_clone", path=APP_DIR))
+            return
+        try:
+            remote = run_command("git", "ls-remote", REPO_URL, "HEAD")
+            if remote.returncode:
+                raise RuntimeError(command_error(remote))
+            latest = remote.stdout.split()[0] if remote.stdout.split() else ""
+            installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
+            if latest and latest == installed:
+                QMessageBox.information(self, "Pense-bête", tr("up_to_date"))
+                return
+            if QMessageBox.question(self, tr("update"), tr("update_available")) != QMessageBox.Yes:
+                return
+            self.save_all()
+            with tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / "pense-bete"
+                result = run_command("git", "clone", "--quiet", "--depth", "1", "--",
+                                     REPO_URL, str(source))
+                if result.returncode == 0:
+                    result = run_command("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
+            if result.returncode:
+                raise RuntimeError(command_error(result))
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            QMessageBox.warning(self, "Pense-bête", tr("update_failed", error=error))
+            return
+        if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
+            self.close()
+            QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
+
+    def uninstall_app(self) -> None:
+        if QMessageBox.question(
+            self, tr("uninstall"), tr("confirm_uninstall", path=DATA_DIR)
+        ) != QMessageBox.Yes:
+            return
+        self.save_all()
+        try:
+            result = run_command("bash", str(APP_DIR / "install.sh"), "--uninstall", "--yes")
+            if result.returncode:
+                raise RuntimeError(command_error(result))
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            QMessageBox.warning(self, "Pense-bête", tr("uninstall_failed", error=error))
+            return
+        QMessageBox.information(self, "Pense-bête", tr("uninstalled", path=DATA_DIR))
+        self.close()
 
     def closeEvent(self, event) -> None:
         # Closing the list quits the application; open notes are saved on the way out.
