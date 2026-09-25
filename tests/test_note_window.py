@@ -276,3 +276,85 @@ def test_ctrl_w_closes_the_note_after_saving_it(qtbot, focused, store):
 
     assert closed == [focused]
     assert store.load_all()[0].content == "first edited"
+
+
+def test_resized_moves_only_the_dragged_edges_and_keeps_the_minimum():
+    from PySide6.QtCore import QRect, QSize
+    from pensebete.note_window import resized
+    start, minimum = QRect(100, 100, 300, 200), QSize(150, 100)
+
+    assert resized(start, Qt.RightEdge | Qt.BottomEdge, 50, 20, minimum) == QRect(100, 100, 350, 220)
+    assert resized(start, Qt.LeftEdge | Qt.TopEdge, 50, 20, minimum) == QRect(150, 120, 250, 180)
+    assert resized(start, Qt.RightEdge | Qt.BottomEdge, -500, -500, minimum) == QRect(100, 100, 150, 100)
+    assert resized(start, Qt.LeftEdge | Qt.TopEdge, 500, 500, minimum) == QRect(250, 200, 150, 100)
+    assert resized(start, Qt.Edge(0), 10, -5, minimum) == QRect(110, 95, 300, 200)
+
+
+def mouse(widget, kind, button, local, modifiers=Qt.AltModifier):
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    buttons = Qt.NoButton if kind == QEvent.MouseButtonRelease else button
+    event = QMouseEvent(kind, QPointF(local), QPointF(widget.mapToGlobal(local)),
+                        button if kind != QEvent.MouseMove else Qt.NoButton, buttons, modifiers)
+    return QApplication.sendEvent(widget, event), event
+
+
+def test_alt_and_the_right_button_resize_from_the_nearest_corner(qtbot, window):
+    from PySide6.QtCore import QEvent, QPoint
+    window.show()
+    qtbot.waitExposed(window)
+    window.setGeometry(100, 100, 400, 300)
+    viewport = window.content_edit.viewport()
+    right_edge = window.geometry().right()
+    # Near the bottom right corner: that corner follows the mouse, the top left stays.
+    press = viewport.mapFrom(window, QPoint(390, 290))
+
+    mouse(viewport, QEvent.MouseButtonPress, Qt.RightButton, press)
+    mouse(viewport, QEvent.MouseMove, Qt.RightButton, press + QPoint(60, 40))
+    assert (window.width(), window.height()) == (460, 340)
+    assert window.geometry().topLeft() == QPoint(100, 100)
+    mouse(viewport, QEvent.MouseMove, Qt.RightButton, press + QPoint(-30, -10))
+    assert (window.width(), window.height()) == (370, 290)
+    mouse(viewport, QEvent.MouseButtonRelease, Qt.RightButton, press + QPoint(-30, -10))
+    assert window.geometry().right() != right_edge
+
+    # The context menu that follows a right click is not shown after a resize.
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication
+    shown = []
+    window.content_edit.customContextMenuRequested.disconnect()
+    window.content_edit.customContextMenuRequested.connect(shown.append)
+    QApplication.sendEvent(viewport, QContextMenuEvent(QContextMenuEvent.Mouse, press, viewport.mapToGlobal(press)))
+    assert shown == []
+
+
+def test_alt_and_the_left_button_move_the_window(qtbot, window):
+    from PySide6.QtCore import QEvent, QPoint
+    window.show()
+    qtbot.waitExposed(window)
+    window.setGeometry(100, 100, 400, 300)
+    viewport = window.content_edit.viewport()
+    text = window.content_edit.toPlainText()
+
+    mouse(viewport, QEvent.MouseButtonPress, Qt.LeftButton, QPoint(50, 50))
+    # Where the window manager does not move it, as offscreen, the window moves itself.
+    mouse(viewport, QEvent.MouseMove, Qt.LeftButton, QPoint(80, 70))
+    mouse(viewport, QEvent.MouseButtonRelease, Qt.LeftButton, QPoint(80, 70))
+
+    assert window.geometry().topLeft() == QPoint(130, 120)
+    assert window.size().width() == 400
+    assert window.content_edit.toPlainText() == text
+
+
+def test_without_alt_the_mouse_edits_as_usual(qtbot, window):
+    from PySide6.QtCore import QEvent, QPoint
+    window.show()
+    qtbot.waitExposed(window)
+    geometry = window.geometry()
+
+    handled, _ = mouse(window.content_edit.viewport(), QEvent.MouseButtonPress, Qt.RightButton,
+                       QPoint(10, 10), Qt.NoModifier)
+
+    assert window.geometry() == geometry
+    assert window.resize_origin is None

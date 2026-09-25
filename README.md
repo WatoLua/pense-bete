@@ -26,6 +26,10 @@ The interface is in French or English, following the system language.
   (Ctrl+Z brings it back). These are also in the right-click menu. Ctrl+Y
   redoes, as does Ctrl+Shift+Z. Ctrl+S saves at once, and Ctrl+W closes the
   window, the note or the list, as Alt+F4 does.
+- Alt with the left button, from anywhere in a note, moves its window; Alt with
+  the right button resizes it from the corner nearest to the click, the
+  opposite corner staying put, so that moving the mouse away grows it and back
+  shrinks it.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and

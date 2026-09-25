@@ -3,7 +3,9 @@
 import subprocess
 from datetime import datetime
 
-from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QByteArray, QEvent, QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal,
+)
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -53,6 +55,23 @@ def highlights(editor: QPlainTextEdit, text: str, ranges: list[tuple[int, int]],
         selection.cursor.setPosition(start + length, QTextCursor.KeepAnchor)
         selections.append(selection)
     return selections
+
+
+def resized(start: QRect, edges: Qt.Edge, dx: int, dy: int, minimum: QSize) -> QRect:
+    """A window's geometry once the given edges have moved by (dx, dy), the others staying
+    put, and never below the minimum size. With no edges, the whole window moves."""
+    if not edges:
+        return start.translated(dx, dy)
+    left, top, right, bottom = start.left(), start.top(), start.right(), start.bottom()
+    if edges & Qt.LeftEdge:
+        left = min(left + dx, right + 1 - minimum.width())
+    if edges & Qt.RightEdge:
+        right = max(right + dx, left - 1 + minimum.width())
+    if edges & Qt.TopEdge:
+        top = min(top + dy, bottom + 1 - minimum.height())
+    if edges & Qt.BottomEdge:
+        bottom = max(bottom + dy, top - 1 + minimum.height())
+    return QRect(QPoint(left, top), QPoint(right, bottom))
 
 
 class HistoryPanel(QFrame):
@@ -289,6 +308,13 @@ class NoteWindow(QWidget):
         # taken before the editor sees it.
         self.content_edit.installEventFilter(self)
 
+        # Alt with a mouse button moves or resizes the window from anywhere in it: every
+        # widget of the window passes its mouse events through here first.
+        self.resize_origin: tuple[QPointF, QRect, Qt.Edge] | None = None
+        self.eat_context_menu = False
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.installEventFilter(self)
+
         self.font_size = DEFAULT_FONT_SIZE
         self.resize(320, 300)
         self._apply_color()
@@ -409,6 +435,8 @@ class NoteWindow(QWidget):
         )
 
     def eventFilter(self, watched, event) -> bool:
+        if self._move_or_resize(event):
+            return True
         if watched is self.content_edit and event.type() == QEvent.KeyPress:
             modifiers = event.modifiers() & ~Qt.KeypadModifier
             if event.key() == Qt.Key_Delete and modifiers == Qt.ControlModifier:
@@ -427,6 +455,41 @@ class NoteWindow(QWidget):
                 self.zoom(1 if event.angleDelta().y() > 0 else -1)
             return True
         return super().eventFilter(watched, event)
+
+    def _move_or_resize(self, event) -> bool:
+        """Alt and the left button move the window, as its title bar does; Alt and the
+        right button resize it from the corner nearest to where it was pressed, the
+        opposite corner staying put, so that moving the mouse away grows it."""
+        kind = event.type()
+        if kind == QEvent.ContextMenu and self.eat_context_menu:
+            self.eat_context_menu = False  # the press was the start of a resize
+            return True
+        if kind == QEvent.MouseButtonPress and event.modifiers() & Qt.AltModifier:
+            if event.button() == Qt.LeftButton:
+                handle = self.windowHandle()
+                # The window manager moves the window, snapping to the edges included.
+                if handle is None or not handle.startSystemMove():
+                    self.resize_origin = (event.globalPosition(), self.geometry(), Qt.Edge(0))
+                return True
+            if event.button() == Qt.RightButton:
+                local = self.mapFromGlobal(event.globalPosition().toPoint())
+                edges = (Qt.LeftEdge if local.x() < self.width() / 2 else Qt.RightEdge) \
+                    | (Qt.TopEdge if local.y() < self.height() / 2 else Qt.BottomEdge)
+                self.resize_origin = (event.globalPosition(), self.geometry(), edges)
+                self.eat_context_menu = True
+                return True
+        if self.resize_origin is None:
+            return False
+        if kind == QEvent.MouseMove:
+            origin, start, edges = self.resize_origin
+            delta = (event.globalPosition() - origin).toPoint()
+            self.setGeometry(resized(start, edges, delta.x(), delta.y(),
+                                     self.minimumSizeHint().expandedTo(self.minimumSize())))
+            return True
+        if kind == QEvent.MouseButtonRelease:
+            self.resize_origin = None
+            return True
+        return False
 
     def zoom(self, step: int) -> None:
         self.set_font_size(self.font_size + step)
