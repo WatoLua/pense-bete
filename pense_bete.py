@@ -294,7 +294,7 @@ class NoteWindow(QWidget):
         )
 
     def _update_window_title(self) -> None:
-        self.setWindowTitle(f"{self.note.display_title} — {APP_NAME}")
+        self.setWindowTitle(self.note.display_title)
 
     def _mark_dirty(self) -> None:
         self.dirty = True
@@ -486,6 +486,10 @@ class MainWindow(QWidget):
 
 
 def main() -> None:
+    # Under Wayland, Qt draws the title bar itself. Its default decoration centers the
+    # title over the whole bar, where the buttons cover it on narrow note windows;
+    # bradient aligns it left. A decoration chosen by the user still wins.
+    os.environ.setdefault("QT_WAYLAND_DECORATION", "bradient")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     # Matches the desktop entry install.sh writes, so the desktop shell groups the
