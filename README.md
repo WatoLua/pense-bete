@@ -45,6 +45,7 @@ The text stays exactly as typed, so unchecking the option loses nothing.
   - Tab and Shift+Tab go to the next and previous cell; Tab in the last cell
     adds a row;
   - Ctrl+Enter adds a row below, Ctrl+Shift+Enter a column to the right;
+  - Ctrl+Backspace deletes the row, Ctrl+Shift+Backspace the column;
   - the right-click menu also adds rows and columns, and deletes them.
 - The right-click menu inserts a task list or a table.
 

@@ -242,11 +242,22 @@ class MarkdownEditing(QObject):
 
     def _table_key(self, event: QKeyEvent) -> bool:
         """Tab and Shift+Tab move between cells, Ctrl+Enter adds a row, Ctrl+Shift+Enter a
-        column; elsewhere than in a table, these keys do what they usually do."""
+        column, Ctrl+Backspace deletes the row, Ctrl+Shift+Backspace the column; elsewhere
+        than in a table, these keys do what they usually do."""
         if self.table() is None:
             return False
         key, modifiers = event.key(), event.modifiers() & ~Qt.KeypadModifier
         enter = key in (Qt.Key_Return, Qt.Key_Enter)
+        if key == Qt.Key_Backspace and modifiers == Qt.ControlModifier:
+            # Taken even where it cannot delete, the header's row: deleting the word
+            # before the cursor instead would be a surprise.
+            if self.can_delete_row():
+                self.delete_row()
+            return True
+        if key == Qt.Key_Backspace and modifiers == Qt.ControlModifier | Qt.ShiftModifier:
+            if self.can_delete_column():
+                self.delete_column()
+            return True
         if key == Qt.Key_Tab and not modifiers:
             self.move_to_cell(1)
         elif key == Qt.Key_Backtab:

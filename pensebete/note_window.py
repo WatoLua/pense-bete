@@ -325,13 +325,14 @@ class NoteWindow(QWidget):
             for label, shortcut, action, enabled in (
                     ("table_insert_row", "Ctrl+Return", editing.insert_row, True),
                     ("table_insert_column", "Ctrl+Shift+Return", editing.insert_column, True),
-                    ("table_delete_row", None, editing.delete_row, editing.can_delete_row()),
-                    ("table_delete_column", None, editing.delete_column,
+                    ("table_delete_row", "Ctrl+Backspace", editing.delete_row,
+                     editing.can_delete_row()),
+                    ("table_delete_column", "Ctrl+Shift+Backspace", editing.delete_column,
                      editing.can_delete_column())):
                 item = menu.addAction(tr(label), action)
                 item.setEnabled(enabled)
-                if shortcut:  # shown in the menu; the editor handles the keys itself
-                    item.setShortcut(QKeySequence(shortcut))
+                # Shown in the menu; the editor handles the keys itself.
+                item.setShortcut(QKeySequence(shortcut))
         if self.markdown:
             menu.addSeparator()
             menu.addAction(tr("insert_tasks"), lambda: self._insert_block(TASKS_TEMPLATE))

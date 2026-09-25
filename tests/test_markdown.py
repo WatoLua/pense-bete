@@ -251,3 +251,17 @@ def test_the_menu_actions_delete_rows_and_columns(table_window):
     editing.delete_row()
     assert lines(table_window) == ["| Day |", "| --- |", "after"]
     assert not editing.can_delete_column()
+
+
+def test_ctrl_backspace_deletes_the_row_and_ctrl_shift_backspace_the_column(table_window):
+    put_cursor(table_window, 0, 3)
+    key(table_window, Qt.Key_Backspace, Qt.ControlModifier)
+    assert lines(table_window)[0] == "| Day | Who |"  # not the header
+
+    put_cursor(table_window, 2, 3)
+    key(table_window, Qt.Key_Backspace, Qt.ControlModifier | Qt.ShiftModifier)
+    assert lines(table_window)[:3] == ["| Who |", "| --- |", "| Ann |"]
+    key(table_window, Qt.Key_Backspace, Qt.ControlModifier)
+    assert lines(table_window) == ["| Who |", "| --- |", "after"]
+    key(table_window, Qt.Key_Backspace, Qt.ControlModifier | Qt.ShiftModifier)
+    assert lines(table_window)[0] == "| Who |"  # the last column stays
