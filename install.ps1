@@ -178,6 +178,12 @@ function Check-Dependencies {
         Native "git" (@("clone", "--quiet", "--depth", "1") + $branch + @("--", $RepoUrl, $SourceDir)) | Out-Null
         if ($LASTEXITCODE) { Fail (T "Could not download the application." "Impossible de t\u00e9l\u00e9charger l'application.") }
     }
+    # Checked before anything is copied, so that a release from before Windows was
+    # supported leaves nothing half installed.
+    $missing = @($Files | Where-Object { -not (Test-Path -LiteralPath (Join-Path $SourceDir $_)) })
+    if ($missing.Count) {
+        Fail (T "This version does not run on Windows yet (missing: {0})." "Cette version ne fonctionne pas encore sous Windows (il manque : {0})." ($missing -join ", "))
+    }
 
     Native $Python @("-c", "import PySide6") | Out-Null
     if ($LASTEXITCODE -eq 0) { return }
