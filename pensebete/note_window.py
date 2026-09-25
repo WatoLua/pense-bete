@@ -151,6 +151,9 @@ class NoteWindow(QWidget):
         self.dirty = False
         self.discarded = False
         self.geometry_before_history: QByteArray | None = None
+        # How the history panel found and left the window, to give its width back on closing.
+        self.width_before_history = self.width_with_history = 0
+        self.splitter_moved = False
 
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -215,6 +218,7 @@ class NoteWindow(QWidget):
         self.splitter.addWidget(self.history)
         self.splitter.addWidget(editor)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.splitterMoved.connect(lambda *_: setattr(self, "splitter_moved", True))
         layout = QVBoxLayout(self)
         layout.addWidget(self.splitter)
 
@@ -287,14 +291,23 @@ class NoteWindow(QWidget):
             self.geometry_before_history = self.saveGeometry()
             self.history.show()
             self._load_history()
+            self.width_before_history = self.width()
             if not self.isMaximized():
                 self.resize(max(self.width() * 2, 640), self.height())
             self.splitter.setSizes([self.width() // 2, self.width() // 2])
+            self.width_with_history = self.width()
+            self.splitter_moved = False
         else:
-            width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
+            if self.width() == self.width_with_history and not self.splitter_moved:
+                width = self.width_before_history  # left as the history opened it
+            else:  # the note keeps the width it was given beside the history
+                width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
             self.history.hide()
             self.geometry_before_history = None
             if not self.isMaximized():
+                # The window's minimum width counts the panel until the layout is redone.
+                self.splitter.updateGeometry()
+                self.layout().activate()
                 self.resize(width, self.height())
 
     def set_on_top(self, on_top: bool) -> None:
