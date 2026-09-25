@@ -347,6 +347,12 @@ class NoteWindow(QWidget):
         self._mark_dirty()
         self.changed.emit(self.note)
 
+    def set_versioning(self, enabled: bool) -> None:
+        """Without versioning, a note has no history to show."""
+        if not enabled:
+            self.history_button.setChecked(False)
+        self.history_button.setVisible(enabled)
+
     def set_markdown(self, enabled: bool) -> None:
         """Show the text's Markdown formatted, or as plain text; the text is the same."""
         self.markdown = self.history.markdown = self.markdown_editing.enabled = enabled

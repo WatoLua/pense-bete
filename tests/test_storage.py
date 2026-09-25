@@ -125,3 +125,41 @@ def test_erase_removes_read_only_files_too(store):
     store.erase(note)
 
     assert not (store.path / "a").exists()
+
+
+def test_without_versioning_notes_are_saved_alone(tmp_path):
+    store = NoteStore(tmp_path / "notes", versioning=False)
+    note = Note("a", content="text")
+
+    store.save(note, "Create")
+
+    assert (store.path / "a" / NOTE_FILE).is_file()
+    assert not (store.path / "a" / ".git").exists()
+    assert store.history(note) == []
+    assert NoteStore(store.path, versioning=False).load_all()[0].content == "text"
+
+
+def test_versioning_back_on_starts_a_note_history_from_its_text(tmp_path):
+    store = NoteStore(tmp_path / "notes", versioning=False)
+    note = Note("a", content="written without git")
+    store.save(note, "Create")
+
+    store.versioning = True
+    note.content = "then with git"
+    store.save(note, "Update")
+
+    assert commits(store.path / "a") == ["Update"]
+    assert [v.content for v in store.history(note)] == ["then with git"]
+
+
+def test_versioning_off_keeps_the_existing_history(store):
+    note = Note("a", content="v1")
+    store.save(note, "Create")
+
+    store.versioning = False
+    note.content = "v2"
+    store.save(note, "Update")
+    store.versioning = True
+
+    assert commits(store.path / "a") == ["Create"]
+    assert store.load_all()[0].content == "v2"

@@ -65,6 +65,12 @@ The text stays exactly as typed, so unchecking the option loses nothing.
 Every save is committed to the note's own local git repository, so the whole
 history of each note is kept, apart from the others.
 
+**Keep each note's history (git)**, in the **⋮** menu, turns this off: notes are
+then saved without commits, and the **History** button goes away. Without git,
+the option is off and greyed out. Repositories already there are kept, and saves
+are committed again once the option is back on. **About…** says whether the
+history is on.
+
 **History** in a note splits its window: the version picked on the left,
 read-only and in its own color, the current note on the right. Versions are
 picked from a dated list, newest first, or browsed with the arrows
@@ -117,7 +123,10 @@ an import never overwrites anything.
 ## Requirements
 
 - Python 3.10+ — on Windows, from [python.org](https://www.python.org/downloads/)
-- git — on Windows, [Git for Windows](https://git-scm.com/download/win)
+- git, for the history of the notes — on Windows,
+  [Git for Windows](https://git-scm.com/download/win). Without it, everything else
+  works: notes are saved without history, and the installer and updates download
+  the releases from GitHub.
 - PySide6 (`pip install PySide6-Essentials`) — the installer offers to install it
 
 On Linux:
@@ -182,7 +191,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Target <directory>]
 ### Updating
 
 In the main window, open the **⋮** menu and choose **Update**: Pense-bête checks
-GitHub for a new release, installs it and offers to restart. Running the
+GitHub for a new release, installs it and offers to restart. Without git, it
+finds the release through the GitHub API and downloads its archive; a repository
+set with `PENSE_BETE_REPO` outside GitHub needs git. Running the
 installation command again does the same. The notes are not touched.
 
 A release is a `vX.Y.Z` tag of the repository: commits pushed without a new tag

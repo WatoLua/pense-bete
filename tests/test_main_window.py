@@ -307,3 +307,37 @@ def test_an_update_in_the_background_says_which_version_it_installed(main_window
     main_window._on_auto_updated("v1.2.0", "Notes")
 
     assert messages and "v1.2.0" in messages[0]
+
+
+def test_turning_versioning_off_hides_the_history(main_window, store):
+    main_window.create_note()
+    note_window = next(iter(main_window.windows.values()))
+    note_window.show()
+    note_window.history_button.setChecked(True)
+
+    main_window.versioning_action.setChecked(False)
+
+    assert not store.versioning
+    assert not note_window.history_button.isVisible()
+    assert not note_window.history_open
+    assert main_window.session.get("versioning", True) is False
+    main_window.create_note()
+    assert all(not w.history_button.isVisibleTo(w) for w in main_window.windows.values())
+
+
+def test_without_git_the_history_is_off_and_cannot_be_turned_on(qtbot, tmp_path, monkeypatch,
+                                                                answer_yes):
+    from PySide6.QtNetwork import QLocalServer
+    from pensebete import main_window as module
+    monkeypatch.setattr(module, "git_available", lambda: False)
+    store = NoteStore(tmp_path / "notes")
+    window = MainWindow(store, Session(tmp_path / "s.json"), QLocalServer())
+
+    assert not store.versioning
+    assert not window.versioning_action.isEnabled()
+    assert not window.versioning_action.isChecked()
+    window.create_note()
+    assert not (store.path / window.notes[0].id / ".git").exists()
+    window.quitting = True
+    for note_window in list(window.windows.values()):
+        note_window.discard()

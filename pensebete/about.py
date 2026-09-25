@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from .config import APP_DIR, APP_NAME, DATA_DIR, DEV_MODE, ICON_PATH, REPO_URL
 from .i18n import tr
-from .updates import can_update, installed_version
+from .updates import can_update, git_version, installed_version
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
@@ -130,6 +130,14 @@ def version_text() -> str:
     return text
 
 
+def history_text(main: "MainWindow") -> str:
+    version = git_version()
+    if not version:
+        return tr("about_history_no_git")
+    return tr("about_history_on", version=version) if main.store.versioning \
+        else tr("about_history_off")
+
+
 def version_summary() -> str:
     version = installed_version()
     if DEV_MODE:
@@ -149,6 +157,7 @@ def technical_text() -> str:
         f"System: {system}",
         f"Display: {display_server()} ({QGuiApplication.platformName()})",
         f"Python: {sys.version.split()[0]}",
+        f"git: {git_version() or 'not installed'}",
         f"PySide6: {PySide6.__version__}, Qt: {qVersion()}",
         f"Installed in: {APP_DIR}",
         f"Notes in: {DATA_DIR}",
@@ -175,7 +184,7 @@ class AboutDialog(QDialog):
         font.setPointSizeF(font.pointSizeF() * 1.5)
         font.setBold(True)
         name.setFont(font)
-        self.version = QLabel(version_text())
+        self.version = QLabel(version_text() + "\n" + history_text(main))
         self.version.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.update_button = QPushButton(tr("about_check_updates"))
         self.update_button.clicked.connect(main.update_app)

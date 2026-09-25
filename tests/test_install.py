@@ -18,13 +18,17 @@ def home(tmp_path):
     return home
 
 
-def install_sh(home, *args, repo=None, piped=False):
+def install_sh(home, *args, repo=None, piped=False, path=None, api=None):
     """Run install.sh from this repository, or as `curl ... | bash` does when piped."""
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("XDG_", "PENSE_BETE_"))}
     env["HOME"] = str(home)
     if repo is not None:
         env["PENSE_BETE_REPO"] = str(repo)
+    if path is not None:
+        env["PATH"] = path
+    if api is not None:
+        env["PENSE_BETE_API"] = api
     script = REPO_DIR / "install.sh"
     if piped:
         result = subprocess.run(["bash", "-s", "--", "--yes", *args], env=env,
@@ -149,3 +153,39 @@ def test_the_standalone_installer_falls_back_to_the_latest_commit(home, tmp_path
     assert "no release" in result.stderr
     assert (target / "pense_bete.py").is_file()
     assert not (target / ".release").exists()  # not a release: no version to show
+
+
+def test_the_commit_and_release_given_are_recorded(home):
+    target = home / "app"
+
+    install_sh(home, str(target), "--commit=abc123", "--release=v9.9.9")
+
+    assert (target / ".version").read_text().strip() == "abc123"
+    assert (target / ".release").read_text().strip() == "v9.9.9"
+
+
+def test_without_git_the_standalone_installer_downloads_the_newest_release(
+        home, no_git_path, fake_github):
+    api, commit = fake_github
+    target = home / "app"
+
+    result = install_sh(home, str(target), piped=True, path=no_git_path, api=api)
+
+    assert "git" in result.stderr  # warned that notes will have no history
+    assert "v1.10.0" in result.stdout
+    assert (target / "pensebete" / "app.py").is_file()
+    assert (target / ".version").read_text().strip() == commit
+    assert (target / ".release").read_text().strip() == "v1.10.0"
+
+
+def test_without_git_a_repository_off_github_cannot_be_downloaded(home, no_git_path):
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("XDG_", "PENSE_BETE_"))}
+    env.update(HOME=str(home), PATH=no_git_path, PENSE_BETE_REPO="/srv/git/pense-bete.git")
+
+    result = subprocess.run(["bash", "-s", "--", "--yes", str(home / "app")], env=env,
+                            input=(REPO_DIR / "install.sh").read_text(), capture_output=True,
+                            text=True)
+
+    assert result.returncode != 0
+    assert "needs git" in result.stderr

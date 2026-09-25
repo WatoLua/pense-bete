@@ -144,10 +144,17 @@ class Note:
 
 
 class NoteStore:
-    """The notes, one directory and git repository each, so every note has its own history."""
+    """The notes, one directory each, and with versioning one git repository each, so that
+    every note has its own history.
 
-    def __init__(self, path: Path):
+    Without versioning, when git is missing or turned off, notes are saved alone and
+    have no history; repositories already there are kept, and saves are committed
+    again once versioning is back, a note's first commit then holding its text as it is.
+    """
+
+    def __init__(self, path: Path, versioning: bool = True):
         self.path = path
+        self.versioning = versioning
         self.repos: dict[str, GitRepo] = {}
         path.mkdir(parents=True, exist_ok=True)
 
@@ -167,16 +174,20 @@ class NoteStore:
         return sorted(notes, key=lambda note: note.created)
 
     def save(self, note: Note, message: str) -> None:
-        repo = self._repo(note)
-        target = repo.path / NOTE_FILE
+        directory = self.path / note.id
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / NOTE_FILE
         # Written to a temporary file then renamed, so a crash never leaves a truncated note.
         temporary = target.with_suffix(".tmp")
         temporary.write_text(json.dumps(note.to_dict(), ensure_ascii=False, indent=2) + "\n",
                              encoding="utf-8")
         temporary.replace(target)
-        repo.commit_file(NOTE_FILE, message)
+        if self.versioning:
+            self._repo(note).commit_file(NOTE_FILE, message)
 
     def history(self, note: Note) -> list[Version]:
+        if not self.versioning:
+            return []
         versions = []
         for commit, timestamp, text in self._repo(note).file_versions(NOTE_FILE):
             try:

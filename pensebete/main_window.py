@@ -41,8 +41,8 @@ from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
 from .updates import (
-    can_update, command_error, install_release, installer, release_notes, run_command,
-    update_available,
+    can_update, command_error, git_available, install_release, installer, release_notes,
+    run_command, update_available,
 )
 
 
@@ -107,6 +107,16 @@ class MainWindow(QWidget):
         self.markdown_action.setCheckable(True)
         self.markdown_action.setChecked(session.get("markdown", False))
         self.markdown_action.toggled.connect(self._set_markdown)
+        # Versioning needs git: without it, the option is off and cannot be turned on.
+        self.versioning_action = options_menu.addAction(tr("versioning"))
+        self.versioning_action.setCheckable(True)
+        self.versioning_action.setChecked(session.get("versioning", True) and git_available())
+        self.versioning_action.setEnabled(git_available())
+        if not git_available():
+            self.versioning_action.setToolTip(tr("git_missing"))
+            options_menu.setToolTipsVisible(True)
+        self.versioning_action.toggled.connect(self._set_versioning)
+        store.versioning = self.versioning_action.isChecked()
         sort_menu = options_menu.addMenu(tr("sort_by"))
         sort_group = QActionGroup(sort_menu)
         for key in SORT_ORDERS:
@@ -185,6 +195,13 @@ class MainWindow(QWidget):
         content = window.content_edit.toPlainText() if window is not None else note.content
         text = searchable(f"{note.title}\n{content}")
         return all(word in text for word in words)
+
+    def _set_versioning(self, enabled: bool) -> None:
+        self.session.set("versioning", enabled)
+        self.session.write()
+        self.store.versioning = enabled
+        for window in self.windows.values():
+            window.set_versioning(enabled)
 
     def _set_markdown(self, enabled: bool) -> None:
         self.session.set("markdown", enabled)
@@ -322,6 +339,7 @@ class MainWindow(QWidget):
             window.set_on_top(note_id in self.session.get("on_top", []))
             window.set_font_size(self.session.get("font_sizes", {}).get(note_id, DEFAULT_FONT_SIZE))
             window.set_markdown(self.markdown_action.isChecked())
+            window.set_versioning(self.store.versioning)
             self.windows[note_id] = window
         window.show()
         window.raise_()
@@ -447,7 +465,7 @@ class MainWindow(QWidget):
                 QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
             box = QMessageBox(QMessageBox.Question, tr("update"),
-                              tr("update_available", version=release),
+                              tr("update_available", version=release.tag),
                               QMessageBox.Yes | QMessageBox.No, self)
             box.setInformativeText(release_notes(release, run_command))
             if box.exec() != QMessageBox.Yes:
@@ -490,7 +508,7 @@ class MainWindow(QWidget):
                 release = update_available()
                 if release is not None:
                     install_release(release)
-                    self.auto_updated.emit(release, release_notes(release))
+                    self.auto_updated.emit(release.tag, release_notes(release))
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                 print(f"Automatic update failed: {error}", file=sys.stderr)
 

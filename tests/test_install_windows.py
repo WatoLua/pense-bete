@@ -21,12 +21,16 @@ def profile(tmp_path):
     return places
 
 
-def install_ps1(profile, *args, repo=None, piped=False):
+def install_ps1(profile, *args, repo=None, piped=False, path=None, api=None):
     """Run install.ps1 from this repository, or as `irm ... | iex` does when piped."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("PENSE_BETE_")}
     env.update({key: str(path) for key, path in profile.items()})
     if repo is not None:
         env["PENSE_BETE_REPO"] = str(repo)
+    if path is not None:
+        env["PATH"] = path
+    if api is not None:
+        env["PENSE_BETE_API"] = api
     script = REPO_DIR / "install.ps1"
     if piped:
         command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
@@ -146,5 +150,29 @@ def test_the_standalone_installer_installs_the_newest_release(profile, tagged_re
     target = profile["LOCALAPPDATA"] / "Programs" / "pense-bete"
     assert "v1.10.0" in result.stdout
     assert (target / ".version").read_text().strip() == commits["v1.10.0"]
+    assert (target / ".release").read_text().strip() == "v1.10.0"
+    assert shortcut(profile).exists()
+
+
+def test_the_commit_and_release_given_are_recorded(profile, tmp_path):
+    target = tmp_path / "app"
+
+    install_ps1(profile, "-Target", str(target), "-Commit", "abc123", "-Release", "v9.9.9")
+
+    assert (target / ".version").read_text().strip() == "abc123"
+    assert (target / ".release").read_text().strip() == "v9.9.9"
+
+
+def test_without_git_the_standalone_installer_downloads_the_newest_release(
+        profile, no_git_path, fake_github):
+    api, commit = fake_github
+
+    result = install_ps1(profile, piped=True, path=no_git_path, api=api)
+
+    target = profile["LOCALAPPDATA"] / "Programs" / "pense-bete"
+    assert "git" in result.stdout  # warned that notes will have no history
+    assert "v1.10.0" in result.stdout
+    assert (target / "pensebete" / "app.py").is_file()
+    assert (target / ".version").read_text().strip() == commit
     assert (target / ".release").read_text().strip() == "v1.10.0"
     assert shortcut(profile).exists()

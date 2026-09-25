@@ -10,6 +10,7 @@ The Windows counterpart of install.sh.
   -Purge                           with -Uninstall: delete the notes and settings too
   .\install.ps1 -Dev               register this clone as "Pense-bete (dev)"
   -Yes                             ask nothing, take the default answers
+  -Commit <sha> -Release <tag>     what is installed, for a copy without git
 
 Also runs on its own, without a clone of the repository; it then installs the newest
 release, the highest vX.Y.Z tag:
@@ -21,7 +22,9 @@ param(
     [switch]$Uninstall,
     [switch]$Purge,
     [switch]$Dev,
-    [switch]$Yes
+    [switch]$Yes,
+    [string]$Commit = "",
+    [string]$Release = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,16 +158,64 @@ function Latest-Release {  # the newest vX.Y.Z tag of $RepoUrl, "" when it has n
     return ""
 }
 
+function GitHub-Api {  # the GitHub API address of $RepoUrl, "" for a repository elsewhere
+    if ($env:PENSE_BETE_API) { return $env:PENSE_BETE_API.TrimEnd("/") }
+    if ($RepoUrl -match '^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$') {
+        return "https://api.github.com/repos/$($Matches[1])/$($Matches[2])"
+    }
+    return ""
+}
+
+# Without git: the newest release through the GitHub API, its archive unpacked into
+# $SourceDir, its tag and commit recorded for the installation.
+function Download-Release {
+    $api = GitHub-Api
+    if (-not $api) {
+        Fail (T "Downloading from {0} needs git." "Le t\u00e9l\u00e9chargement depuis {0} n\u00e9cessite git." $RepoUrl)
+    }
+    Info (T "Downloading the newest release of {0} from {1}" "T\u00e9l\u00e9chargement de la derni\u00e8re version de {0} depuis {1}" @($AppName, $RepoUrl))
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $headers = @{ "User-Agent" = "pense-bete" }
+    try {
+        $tags = @(Invoke-RestMethod -Uri "$api/tags?per_page=100" -Headers $headers -UseBasicParsing |
+            ForEach-Object { $_ } | Where-Object { $_.name -match '^v\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.name.Substring(1) })
+        if (-not $tags.Count) { throw "no release" }
+        $tag = $tags[-1]
+        $zip = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid()).zip"
+        $unpacked = "$zip.d"
+        Invoke-WebRequest -Uri $tag.zipball_url -Headers $headers -OutFile $zip -UseBasicParsing
+        Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
+        # GitHub puts the files in one top directory.
+        $top = @(Get-ChildItem -LiteralPath $unpacked -Directory)[0].FullName
+        Move-Item -LiteralPath $top -Destination $SourceDir
+    } catch {
+        Fail (T "Could not download the application: {0}" "Impossible de t\u00e9l\u00e9charger l'application : {0}" "$_")
+    } finally {
+        if ($zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+        if ($unpacked) { Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    $script:Release = $tag.name
+    $script:Commit = $tag.commit.sha
+    Info (T "{0} {1} downloaded" "{0} {1} t\u00e9l\u00e9charg\u00e9" @($AppName, $Release))
+}
+
 function Check-Dependencies {
     $script:Python = Find-Python
     if (-not $Python) {
         Fail (T "Python 3 not found. Install it from https://www.python.org/downloads/ then run this again." "Python 3 est introuvable. Installez-le depuis https://www.python.org/downloads/ puis relancez.")
     }
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Fail (T "git not found, please install it first (it versions the notes): https://git-scm.com/download/win" "git est introuvable, installez-le d'abord (il versionne les post-its) : https://git-scm.com/download/win")
+    # Only a warning: without git, notes are saved without history.
+    $script:HasGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
+    if (-not $HasGit) {
+        Warn (T "git is not installed: notes will be saved without history. Install it to keep it: https://git-scm.com/download/win" "git n'est pas install\u00e9 : les post-its seront sauvegard\u00e9s sans historique. Installez-le pour le garder : https://git-scm.com/download/win")
     }
 
-    if (-not $SourceDir) {
+    if (-not $SourceDir -and -not $HasGit) {
+        $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
+        $script:Cleanup = $SourceDir
+        Download-Release
+    } elseif (-not $SourceDir) {
         $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
         $script:Cleanup = $SourceDir
         $release = Latest-Release
@@ -297,13 +348,18 @@ function Do-Install {
         Copy-Item -Path (Join-Path $SourceDir "$Package\*.py") -Destination $packageDir
     }
     # The installed commit, which the application compares with the repository to offer
-    # updates, and the release it is, when the commit is one, for the About window.
+    # updates, and the release it is, when the commit is one, for the About window; given
+    # by -Commit and -Release for a copy git cannot tell about, as an archive.
     if (-not (Test-Path -LiteralPath (Join-Path $installDir ".git"))) {
-        foreach ($record in @(@(".version", @("rev-parse", "HEAD")),
-                              @(".release", @("describe", "--tags", "--exact-match", "--match", "v[0-9]*", "HEAD")))) {
+        foreach ($record in @(@(".version", $Commit, @("rev-parse", "HEAD")),
+                              @(".release", $Release, @("describe", "--tags", "--exact-match", "--match", "v[0-9]*", "HEAD")))) {
             $path = Join-Path $installDir $record[0]
-            $value = Native "git" (@("-C", $SourceDir) + $record[1])
-            if ($LASTEXITCODE -eq 0 -and $value) {
+            $value = $record[1]
+            if (-not $value -and $HasGit) {
+                $value = Native "git" (@("-C", $SourceDir) + $record[2])
+                if ($LASTEXITCODE) { $value = "" }
+            }
+            if ($value) {
                 [IO.File]::WriteAllText($path, "$value".Trim() + "`n")
             } else {
                 Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -321,6 +377,7 @@ function Do-Install {
 }
 
 $Cleanup = ""
+$HasGit = $false
 try {
     if ($Uninstall) { Do-Uninstall } else { Do-Install }
 } finally {

@@ -1,4 +1,7 @@
+import io
+import json
 import subprocess
+import zipfile
 
 import pytest
 
@@ -29,21 +32,24 @@ TAGS = (
 
 
 def test_the_newest_release_is_compared_by_number():
-    assert updates.latest_release(lambda *args: completed(TAGS)) == ("v1.2.10", "bbb")
+    assert updates.latest_release(lambda *args: completed(TAGS), use_git=True) == (
+        "v1.2.10", "bbb", "")
 
 
 def test_an_annotated_tag_stands_for_the_commit_it_points_to():
     listing = "tagobj\trefs/tags/v1.0.0\ncommit\trefs/tags/v1.0.0^{}\n"
-    assert updates.latest_release(lambda *args: completed(listing)) == ("v1.0.0", "commit")
+    release = updates.latest_release(lambda *args: completed(listing), use_git=True)
+    assert release[:2] == ("v1.0.0", "commit")
 
 
 def test_a_repository_without_releases_has_no_update(installed):
-    assert updates.latest_release(lambda *args: completed("ddd\trefs/tags/latest\n")) is None
+    assert updates.latest_release(lambda *args: completed("ddd\trefs/tags/latest\n"),
+                                  use_git=True) is None
     assert updates.update_available(lambda *args: completed("")) is None
 
 
 def test_an_update_is_available_when_a_newer_release_exists(installed):
-    assert updates.update_available(lambda *args: completed(TAGS)) == "v1.2.10"
+    assert updates.update_available(lambda *args: completed(TAGS)).tag == "v1.2.10"
 
 
 def test_no_update_when_the_newest_release_is_installed(installed):
@@ -63,14 +69,15 @@ def test_install_release_installs_that_tag(installed):
         calls.append(args)
         return completed()
 
-    updates.install_release("v1.2.10", runner)
+    release = updates.Release("v1.2.10", "bbb")
+    updates.install_release(release, runner)
 
     clone, install = calls
     assert clone[:2] == ("git", "clone")
     assert clone[clone.index("--branch") + 1] == "v1.2.10"
     assert clone[-2] == updates.REPO_URL
     source = updates.Path(clone[-1])
-    assert list(install) == updates.installer(source, "yes", target=installed)
+    assert list(install) == updates.installer(source, "yes", target=installed, release=release)
 
 
 def test_the_installer_command_on_linux(monkeypatch, tmp_path):
@@ -100,7 +107,7 @@ def test_a_failed_download_stops_the_update(installed):
         return completed(returncode=1, stderr="no network")
 
     with pytest.raises(RuntimeError, match="no network"):
-        updates.install_release("v1.0.0", runner)
+        updates.install_release(updates.Release("v1.0.0", "abc"), runner)
     assert len(calls) == 1
 
 
@@ -108,7 +115,7 @@ def test_releases_are_read_from_a_real_repository(tagged_repo, monkeypatch):
     repo, commits = tagged_repo
     monkeypatch.setattr(updates, "REPO_URL", str(repo))
 
-    assert updates.latest_release() == ("v1.10.0", commits["v1.10.0"])
+    assert updates.latest_release()[:2] == ("v1.10.0", commits["v1.10.0"])
 
 
 def test_a_clone_is_not_updated(installed):
@@ -121,9 +128,10 @@ def test_release_notes_are_the_message_of_an_annotated_tag(tagged_repo, monkeypa
     repo, _ = tagged_repo
     monkeypatch.setattr(updates, "REPO_URL", str(repo))
 
-    assert updates.release_notes("v1.10.0") == "Release"
-    assert updates.release_notes("v1.9.0") == ""  # lightweight: no message of its own
-    assert updates.release_notes("v9.9.9") == ""  # missing: no notes, no failure
+    assert updates.release_notes(updates.Release("v1.10.0", "")) == "Release"
+    # Lightweight: no message of its own. Missing: no notes, no failure.
+    assert updates.release_notes(updates.Release("v1.9.0", "")) == ""
+    assert updates.release_notes(updates.Release("v9.9.9", "")) == ""
 
 
 def test_the_installed_release_and_its_date(installed):
@@ -150,3 +158,91 @@ def test_a_clone_reports_its_branch_commit_and_changes(tmp_path, monkeypatch):
 
     (tmp_path / "file").write_text("changed")
     assert updates.installed_version().modified
+
+
+# Without git: the GitHub API, served here by a dictionary of URL -> response.
+API = "https://api.github.com/repos/someone/pense-bete"
+
+
+def fake_github(responses):
+    def fetcher(url):
+        if url not in responses:
+            raise RuntimeError(f"{url}: 404")
+        value = responses[url]
+        return value if isinstance(value, bytes) else json.dumps(value).encode()
+    return fetcher
+
+
+def test_the_api_address_comes_from_a_github_url(monkeypatch):
+    monkeypatch.delenv("PENSE_BETE_API", raising=False)
+    for url in ("https://github.com/someone/pense-bete.git", "https://github.com/someone/pense-bete"):
+        monkeypatch.setattr(updates, "REPO_URL", url)
+        assert updates.github_api() == API
+    monkeypatch.setattr(updates, "REPO_URL", "https://gitlab.com/someone/pense-bete.git")
+    assert updates.github_api() == ""
+
+
+def test_without_git_the_newest_release_comes_from_the_api(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    fetcher = fake_github({f"{API}/tags?per_page=100": [
+        {"name": "v1.9.0", "commit": {"sha": "old"}, "zipball_url": "zip/v1.9.0"},
+        {"name": "v1.10.0", "commit": {"sha": "new"}, "zipball_url": "zip/v1.10.0"},
+        {"name": "v2.0.0-rc1", "commit": {"sha": "rc"}, "zipball_url": "zip/rc"},
+    ]})
+
+    assert updates.latest_release(fetcher=fetcher, use_git=False) == (
+        "v1.10.0", "new", "zip/v1.10.0")
+
+
+def test_without_git_a_repository_off_github_cannot_update(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "/srv/git/pense-bete.git")
+    with pytest.raises(RuntimeError, match="git"):
+        updates.latest_release(use_git=False)
+
+
+def test_without_git_the_release_notes_come_from_the_api(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    fetcher = fake_github({
+        f"{API}/git/refs/tags/v1.0.0": {"object": {"type": "tag", "sha": "t1"}},
+        f"{API}/git/tags/t1": {"message": "Search and sort\n"},
+        f"{API}/git/refs/tags/v0.9.0": {"object": {"type": "commit", "sha": "c1"}},
+    })
+
+    assert updates.release_notes(updates.Release("v1.0.0", "c", "zip"), fetcher=fetcher) == \
+        "Search and sort"
+    assert updates.release_notes(updates.Release("v0.9.0", "c", "zip"), fetcher=fetcher) == ""
+    assert updates.release_notes(updates.Release("v9.9.9", "c", "zip"), fetcher=fetcher) == ""
+
+
+def zip_of(files: dict[str, str], top="someone-pense-bete-1a2b3c4") -> bytes:
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        for name, text in files.items():
+            archive.writestr(f"{top}/{name}", text)
+    return data.getvalue()
+
+
+def test_without_git_a_release_is_downloaded_and_installed_with_its_commit(installed):
+    calls = []
+
+    def runner(*args):
+        calls.append(args)
+        source = updates.Path(args[1]).parent
+        assert (source / "pensebete" / "app.py").read_text() == "app"
+        return completed()
+    release = updates.Release("v1.10.0", "new", "https://example.com/zip")
+    fetcher = fake_github({release.archive: zip_of({"install.sh": "", "pensebete/app.py": "app"})})
+
+    updates.install_release(release, runner, fetcher)
+
+    [install] = calls
+    assert list(install[2:]) == updates.installer(updates.Path("."), "yes", target=installed,
+                                                  release=release)[2:]
+
+
+def test_an_archive_that_climbs_out_is_refused(installed):
+    release = updates.Release("v1.0.0", "c", "https://example.com/zip")
+    fetcher = fake_github({release.archive: zip_of({"../evil": "x"})})
+
+    with pytest.raises(RuntimeError):
+        updates.install_release(release, lambda *args: completed(), fetcher)

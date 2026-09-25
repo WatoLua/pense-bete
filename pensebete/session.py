@@ -13,7 +13,7 @@ class Session:
     Keys: "background" (bool), "main_open" (bool), "open_notes", "recent" and "on_top"
     (note ids, most recent first for "recent"), "geometries" (window key -> base64),
     "font_sizes" (note id -> pixels, for the zoomed notes only), "sort" (the list's order),
-    "markdown", "retention_days" and "auto_update".
+    "markdown", "versioning", "retention_days" and "auto_update".
     """
 
     def __init__(self, path: Path):

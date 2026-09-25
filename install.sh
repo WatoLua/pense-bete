@@ -6,6 +6,7 @@
 #        --purge                      with --uninstall: delete the notes and settings too
 #        ./install.sh --dev           register this clone as "Pense-bête (dev)"
 #        --yes                        ask nothing, take the default answers
+#        --commit=<sha> --release=<tag>  what is installed, for a copy without git
 #
 # Also runs on its own, without a clone of the repository; it then installs the newest
 # release, the highest vX.Y.Z tag:
@@ -17,12 +18,16 @@ TARGET=""
 ASSUME_YES=""
 PURGE=""
 DEV=""
+COMMIT=""
+RELEASE=""
 for arg in "$@"; do
     case "$arg" in
         --uninstall) ACTION=uninstall ;;
         --purge) PURGE=1 ;;
         --dev) DEV=1 ;;
         -y|--yes) ASSUME_YES=1 ;;
+        --commit=*) COMMIT="${arg#--commit=}" ;;
+        --release=*) RELEASE="${arg#--release=}" ;;
         -h|--help) ACTION=help ;;
         *) TARGET="$arg" ;;
     esac
@@ -127,6 +132,48 @@ uninstall() {
     fi
 }
 
+github_api() {  # the GitHub API address of REPO_URL, empty for a repository elsewhere
+    local url="${REPO_URL%/}"
+    url="${url%.git}"
+    if [[ -n "${PENSE_BETE_API:-}" ]]; then
+        printf '%s' "${PENSE_BETE_API%/}"
+    elif [[ "$url" =~ ^https://github\.com/([^/]+)/([^/]+)$ ]]; then
+        printf 'https://api.github.com/repos/%s/%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    fi
+}
+
+# Without git: the newest release through the GitHub API, its archive unpacked into $1.
+# Prints its tag and commit.
+download_release() {
+    python3 - "$1" "$2" <<'PYTHON'
+import io, json, re, shutil, sys, tempfile, urllib.request, zipfile
+from pathlib import Path, PurePosixPath
+
+target, api = Path(sys.argv[1]), sys.argv[2]
+
+def get(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "pense-bete"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+tags = [tag for tag in json.loads(get(api + "/tags?per_page=100"))
+        if re.fullmatch(r"v\d+\.\d+\.\d+", tag["name"])]
+if not tags:
+    sys.exit("no release")
+tag = max(tags, key=lambda tag: tuple(int(n) for n in tag["name"][1:].split(".")))
+with zipfile.ZipFile(io.BytesIO(get(tag["zipball_url"]))) as archive:
+    if any(PurePosixPath(n).is_absolute() or ".." in PurePosixPath(n).parts
+           for n in archive.namelist()):
+        sys.exit("unexpected archive")
+    with tempfile.TemporaryDirectory() as temporary:
+        archive.extractall(temporary)
+        [top] = Path(temporary).iterdir()
+        for item in top.iterdir():
+            shutil.move(str(item), str(target / item.name))
+print(tag["name"], tag["commit"]["sha"])
+PYTHON
+}
+
 latest_release() {  # the newest vX.Y.Z tag of REPO_URL, empty when it has none
     git ls-remote --tags --refs -- "$REPO_URL" 'refs/tags/v*' 2>/dev/null \
         | sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' \
@@ -135,20 +182,33 @@ latest_release() {  # the newest vX.Y.Z tag of REPO_URL, empty when it has none
 
 check_dependencies() {
     command -v python3 >/dev/null || fail "$(t "python3 not found, please install it first." "python3 est introuvable, installez-le d'abord.")"
-    command -v git >/dev/null || fail "$(t "git not found, please install it first (it versions the notes)." "git est introuvable, installez-le d'abord (il versionne les post-its).")"
+    # Only a warning: without git, notes are saved without history.
+    command -v git >/dev/null || warn "$(t "git is not installed: notes will be saved without history. Install git to keep it." "git n'est pas installé : les post-its seront sauvegardés sans historique. Installez git pour le garder.")"
 
     if [[ -z "$SOURCE_DIR" ]]; then
         SOURCE_DIR="$(mktemp -d)"
         trap 'rm -rf -- "$SOURCE_DIR"' EXIT
-        local release
-        release="$(latest_release)"
-        if [[ -n "$release" ]]; then
-            info "$(t "Downloading Pense-bête $release from $REPO_URL" "Téléchargement de Pense-bête $release depuis $REPO_URL")"
+        if command -v git >/dev/null; then
+            local release
+            release="$(latest_release)"
+            if [[ -n "$release" ]]; then
+                info "$(t "Downloading Pense-bête $release from $REPO_URL" "Téléchargement de Pense-bête $release depuis $REPO_URL")"
+            else
+                warn "$(t "$REPO_URL has no release yet: installing its latest commit." "$REPO_URL n'a encore aucune version publiée : installation de son dernier commit.")"
+            fi
+            git clone --quiet --depth 1 ${release:+--branch "$release"} -- "$REPO_URL" "$SOURCE_DIR" \
+                || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
         else
-            warn "$(t "$REPO_URL has no release yet: installing its latest commit." "$REPO_URL n'a encore aucune version publiée : installation de son dernier commit.")"
+            local api downloaded
+            api="$(github_api)"
+            [[ -n "$api" ]] || fail "$(t "Downloading from $REPO_URL needs git." "Le téléchargement depuis $REPO_URL nécessite git.")"
+            info "$(t "Downloading the newest release of Pense-bête from $REPO_URL" "Téléchargement de la dernière version de Pense-bête depuis $REPO_URL")"
+            downloaded="$(download_release "$SOURCE_DIR" "$api")" \
+                || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
+            RELEASE="${downloaded% *}"
+            COMMIT="${downloaded#* }"
+            info "$(t "Pense-bête $RELEASE downloaded" "Pense-bête $RELEASE téléchargé")"
         fi
-        git clone --quiet --depth 1 ${release:+--branch "$release"} -- "$REPO_URL" "$SOURCE_DIR" \
-            || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
     fi
 
     # Only a warning: without it the application runs under Wayland, which does not
@@ -201,11 +261,20 @@ install() {
     fi
     chmod +x "$target/pense-bete" "$target/pense_bete.py" "$target/install.sh"
     # The installed commit, which the application compares with the repository to offer updates.
+    # Given by --commit and --release for a copy git cannot tell about, as an archive.
     if [[ ! -e "$target/.git" ]]; then
-        git -C "$SOURCE_DIR" rev-parse HEAD > "$target/.version" 2>/dev/null || rm -f -- "$target/.version"
+        local commit="$COMMIT" release="$RELEASE"
+        [[ -n "$commit" ]] || commit="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
         # And the release it is, when the commit is one, for the About window.
-        git -C "$SOURCE_DIR" describe --tags --exact-match --match 'v[0-9]*' HEAD \
-            > "$target/.release" 2>/dev/null || rm -f -- "$target/.release"
+        [[ -n "$release" ]] || release="$(git -C "$SOURCE_DIR" describe --tags --exact-match \
+            --match 'v[0-9]*' HEAD 2>/dev/null || true)"
+        for record in ".version:$commit" ".release:$release"; do
+            if [[ -n "${record#*:}" ]]; then
+                printf '%s\n' "${record#*:}" > "$target/${record%%:*}"
+            else
+                rm -f -- "$target/${record%%:*}"
+            fi
+        done
     fi
 
     info "$(t "Adding the entry to the applications menu" "Ajout de l'entrée dans le menu des applications")"
@@ -238,6 +307,6 @@ EOF
 
 case "$ACTION" in
     uninstall) uninstall ;;
-    help) sed -n '2,8p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    help) sed -n '2,9p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
     install) install "$TARGET" ;;
 esac

@@ -116,3 +116,73 @@ def tagged_repo(tmp_path):
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="Linux only")
+
+
+@pytest.fixture
+def no_git_path(tmp_path):
+    """A PATH with every command of this one but git, as on a machine without git."""
+    import shutil
+    names = {"git", "git.exe", "git.cmd"}
+    directories = [d for d in os.environ.get("PATH", "").split(os.pathsep) if os.path.isdir(d)]
+    if sys.platform == "win32":
+        # Git for Windows has directories of its own: the PATH goes without them.
+        path = os.pathsep.join(d for d in directories
+                               if not any(os.path.exists(os.path.join(d, n)) for n in names))
+    else:
+        # git shares /usr/bin with everything else: the PATH is links to all but git.
+        bin_dir = tmp_path / "no-git-bin"
+        bin_dir.mkdir()
+        for directory in directories:
+            for entry in os.scandir(directory):
+                link = bin_dir / entry.name
+                if entry.name not in names and not link.exists() and os.access(entry.path, os.X_OK):
+                    os.symlink(entry.path, link)
+        path = str(bin_dir)
+    assert shutil.which("git", path=path) is None
+    return path
+
+
+@pytest.fixture
+def fake_github():
+    """A local stand-in for the GitHub API: its tags and the archive of v1.10.0, made
+    of this working tree's files. Yields the API address and the release's commit."""
+    import io
+    import json
+    import threading
+    import zipfile
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        for file in REPO_DIR.rglob("*"):
+            relative = file.relative_to(REPO_DIR)
+            if file.is_file() and not {".git", "__pycache__", ".pytest_cache"} & set(relative.parts):
+                output.write(file, f"someone-pense-bete-1a2b3c4/{relative.as_posix()}")
+    commit = "1a2b3c4d" * 5
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            base = f"http://127.0.0.1:{self.server.server_port}"
+            if self.path.startswith("/tags"):
+                body = json.dumps([
+                    {"name": "v1.9.0", "commit": {"sha": "0" * 40}, "zipball_url": f"{base}/old"},
+                    {"name": "v1.10.0", "commit": {"sha": commit}, "zipball_url": f"{base}/zip"},
+                ]).encode()
+            elif self.path == "/zip":
+                body = archive.getvalue()
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}", commit
+    server.shutdown()
