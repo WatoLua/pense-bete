@@ -144,6 +144,7 @@ TRANSLATIONS = {
     "history_failed": {"en": "Could not read the history:\n{error}",
                        "fr": "Impossible de lire l'historique :\n{error}"},
     "quit": {"en": "Quit", "fr": "Quitter"},
+    "restart": {"en": "Restart", "fr": "Redémarrer"},
     "update": {"en": "Update", "fr": "Mettre à jour"},
     "auto_update": {"en": "Update automatically at launch",
                     "fr": "Mettre à jour automatiquement au démarrage"},
@@ -914,6 +915,9 @@ class MainWindow(QWidget):
         self.auto_updated.connect(self._on_auto_updated)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
         options_menu.addSeparator()
+        if DEV_MODE:
+            # Picks up changes to the code without closing and reopening by hand.
+            options_menu.addAction(tr("restart"), self.restart)
         options_menu.addAction(tr("quit"), self.quit_app)
         options_button.setMenu(options_menu)
 
@@ -1159,10 +1163,14 @@ class MainWindow(QWidget):
 
     def _offer_restart(self) -> None:
         if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
-            # Closed first, so the new instance does not hand itself over to this one.
-            self.server.close()
-            self.quit_app()
-            QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
+            self.restart()
+
+    def restart(self) -> None:
+        """Quit, saving the session and the notes, and launch the application again."""
+        # Closed first, so the new instance does not hand itself over to this one.
+        self.server.close()
+        self.quit_app()
+        QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
 
     def auto_update(self) -> None:
         """At launch, when enabled: update in a background thread, keeping the interface

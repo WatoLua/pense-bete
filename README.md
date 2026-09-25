@@ -144,7 +144,8 @@ its own entry in the application menu once registered with:
 ```
 
 The entry runs the code of the clone directly, so changes are picked up at the
-next launch; `./pense-bete` from the clone does the same. `pense-bete-dev` is
+next launch; `./pense-bete` from the clone does the same, and **Restart** in the
+**⋮** menu, only there in development, relaunches it with the current code. `pense-bete-dev` is
 also available as a command. To remove the entry: `./install.sh --uninstall --dev`
 (the clone itself is kept).
 
