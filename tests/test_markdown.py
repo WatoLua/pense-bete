@@ -1,0 +1,147 @@
+import pytest
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QFont, QKeyEvent, QMouseEvent, QTextCharFormat, QTextCursor
+from PySide6.QtWidgets import QApplication
+
+from conftest import commits
+from pensebete.markdown import align_table, continued_item
+from pensebete.note_window import NoteWindow
+from pensebete.storage import Note
+
+
+@pytest.fixture
+def window(qtbot, store, answer_yes):
+    note = Note("a", "Title", content="# Heading\nsome **bold** text\n- [ ] task\n- [x] done")
+    store.save(note, "Create note")
+    window = NoteWindow(note, store)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    return window
+
+
+def char_format(window, line, column):
+    block = window.content_edit.document().findBlockByNumber(line)
+    for format_range in block.layout().formats():
+        if format_range.start <= column < format_range.start + format_range.length:
+            return QTextCharFormat(format_range.format)
+    return None
+
+
+def click(window, line, column):
+    editor = window.content_edit
+    cursor = QTextCursor(editor.document().findBlockByNumber(line))
+    cursor.movePosition(QTextCursor.Right, n=column)
+    point = editor.cursorRect(cursor).center() + QPoint(2, 0)
+    for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+        QApplication.sendEvent(editor.viewport(), QMouseEvent(
+            kind, QPointF(point), QPointF(editor.viewport().mapToGlobal(point)),
+            Qt.LeftButton, Qt.LeftButton if kind == QEvent.MouseButtonPress else Qt.NoButton,
+            Qt.NoModifier))
+
+
+def press_enter(window):
+    QApplication.sendEvent(window.content_edit,
+                           QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier, "\r"))
+
+
+def end_of_line(window, line):
+    cursor = QTextCursor(window.content_edit.document().findBlockByNumber(line))
+    cursor.movePosition(QTextCursor.EndOfBlock)
+    window.content_edit.setTextCursor(cursor)
+
+
+def test_plain_text_is_the_default_and_shows_no_formatting(window):
+    assert not window.markdown
+    assert char_format(window, 1, 8) is None
+
+
+def test_markdown_is_formatted_without_changing_the_text(qtbot, window, store):
+    text = window.content_edit.toPlainText()
+
+    window.set_markdown(True)
+    qtbot.wait(20)
+
+    assert char_format(window, 1, 8).fontWeight() == QFont.Bold  # "bold"
+    assert char_format(window, 3, 8).fontStrikeOut()  # the checked task
+    assert char_format(window, 0, 3).font().pixelSize() > 13  # the heading
+    assert window.content_edit.toPlainText() == text
+    assert not window.dirty
+    window.close()
+    assert commits(store.path / "a") == ["Create note"]
+
+
+def test_a_click_on_a_checkbox_toggles_it(window):
+    window.set_markdown(True)
+
+    click(window, 2, 3)
+    assert window.content_edit.toPlainText().splitlines()[2] == "- [x] task"
+    click(window, 3, 3)
+    assert window.content_edit.toPlainText().splitlines()[3] == "- [ ] done"
+    assert window.dirty
+
+    window.content_edit.undo()
+    assert window.content_edit.toPlainText().splitlines()[3] == "- [x] done"
+
+
+def test_checkboxes_do_not_toggle_in_plain_text(window):
+    click(window, 2, 3)
+
+    assert window.content_edit.toPlainText().splitlines()[2] == "- [ ] task"
+
+
+def test_enter_continues_a_task_list_and_an_empty_item_ends_it(window):
+    window.set_markdown(True)
+    end_of_line(window, 3)
+
+    press_enter(window)
+    assert window.content_edit.toPlainText().endswith("- [x] done\n- [ ] ")
+    press_enter(window)
+    assert window.content_edit.toPlainText().endswith("- [x] done\n")
+
+
+def test_a_table_is_aligned_once_the_cursor_leaves_it(window):
+    window.set_markdown(True)
+    window.content_edit.setPlainText("| a | long header |\n|-|-|\n| wide cell | b |\nafter")
+    end_of_line(window, 2)
+    assert window.content_edit.toPlainText().startswith("| a | long")  # not while in it
+
+    end_of_line(window, 3)
+
+    assert window.content_edit.toPlainText().splitlines() == [
+        "| a         | long header |",
+        "| --------- | ----------- |",
+        "| wide cell | b           |",
+        "after",
+    ]
+
+
+def test_align_table_keeps_the_alignment_colons_and_fills_missing_cells():
+    assert align_table(["|x|y|z|", "|:-|:-:|-:|", "|1|2|"]) == [
+        "| x   | y   | z   |",
+        "| :-- | :-: | --: |",
+        "| 1   | 2   |     |",
+    ]
+
+
+@pytest.mark.parametrize("line, prefix", [
+    ("- item", "- "),
+    ("  * nested", "  * "),
+    ("3. third", "4. "),
+    ("- [x] done", "- [ ] "),
+    ("- ", ""),
+    ("plain text", None),
+])
+def test_continued_item(line, prefix):
+    assert continued_item(line) == prefix
+
+
+def test_the_option_applies_to_open_and_new_windows(main_window):
+    main_window.create_note()
+    first = next(iter(main_window.windows.values()))
+
+    main_window.markdown_action.setChecked(True)
+    assert first.markdown
+    main_window.create_note()
+    assert all(window.markdown for window in main_window.windows.values())
+    assert main_window.session.get("markdown", False) is True

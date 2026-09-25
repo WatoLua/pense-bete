@@ -28,9 +28,12 @@ from .config import (
 )
 from .diff import differences, utf16_ranges
 from .i18n import tr
+from .markdown import MarkdownEditing, MarkdownHighlighter
 from .storage import Note, NoteStore, Version
 from .style import color_icon, pin_icon, text_color_for
 
+
+TASKS_TEMPLATE = "- [ ] "
 
 # Translucent, so that they read on any note color.
 REMOVED_COLOR = QColor(229, 57, 53, 90)
@@ -84,6 +87,9 @@ class HistoryPanel(QFrame):
         self.title.setWordWrap(True)
         self.content = QPlainTextEdit()
         self.content.setReadOnly(True)
+        self.markdown = False
+        self.highlighter = MarkdownHighlighter(self.content.document(), self.font_size,
+                                               "#000000")
 
         self.restore_button = QPushButton(tr("history_restore"))
         self.restore_button.setToolTip(tr("history_restore_tip"))
@@ -156,6 +162,7 @@ class HistoryPanel(QFrame):
         self.title.setText(version.title.strip() or tr("untitled"))
         self.content.setPlainText(version.content)
         foreground = text_color_for(version.color)
+        self.highlighter.configure(self.markdown, self.font_size, foreground)
         self.setStyleSheet(
             f"QPlainTextEdit, QLabel#historyTitle {{ background: {version.color};"
             f" color: {foreground}; border: none; font-size: {self.font_size}px; }}"
@@ -206,10 +213,17 @@ class NoteWindow(QWidget):
         self.color_button.setMenu(menu)
 
         self.content_edit = QPlainTextEdit(note.content)
+        self.markdown = False
+        self.highlighter = MarkdownHighlighter(self.content_edit.document(), DEFAULT_FONT_SIZE,
+                                               text_color_for(note.color))
+        self.markdown_editing = MarkdownEditing(self.content_edit)
+        self.content_edit.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.content_edit.customContextMenuRequested.connect(self._show_context_menu)
         self.content_edit.setPlaceholderText(tr("content_placeholder"))
-        self.content_edit.textChanged.connect(self._mark_dirty)
-        self.content_edit.textChanged.connect(
-            lambda: self.history.isVisible() and self.differences_timer.start())
+        # textChanged also fires when the Markdown highlighting repaints the text: only a
+        # text that differs from the last one seen is an edit.
+        self.last_text = note.content
+        self.content_edit.textChanged.connect(self._on_text_changed)
 
         self.on_top_button = QToolButton()
         self.on_top_button.setCheckable(True)
@@ -290,8 +304,37 @@ class NoteWindow(QWidget):
         self._mark_dirty()
         self.changed.emit(self.note)
 
+    def set_markdown(self, enabled: bool) -> None:
+        """Show the text's Markdown formatted, or as plain text; the text is the same."""
+        self.markdown = self.history.markdown = self.markdown_editing.enabled = enabled
+        self._apply_color()
+        if self.history.isVisible():
+            self.history.select(self.history.combo.currentIndex())
+
+    def _show_context_menu(self, position) -> None:
+        menu = self.content_edit.createStandardContextMenu()
+        if self.markdown:
+            menu.addSeparator()
+            menu.addAction(tr("insert_tasks"), lambda: self._insert_block(TASKS_TEMPLATE))
+            menu.addAction(tr("insert_table"), lambda: self._insert_block(tr("table_template")))
+        menu.exec(self.content_edit.viewport().mapToGlobal(position))
+        menu.deleteLater()
+
+    def _insert_block(self, text: str) -> None:
+        """Insert lines of Markdown on lines of their own, at the cursor."""
+        cursor = self.content_edit.textCursor()
+        cursor.beginEditBlock()
+        if cursor.block().text().strip():
+            cursor.movePosition(QTextCursor.EndOfBlock)
+            cursor.insertText("\n")
+        cursor.insertText(text)
+        cursor.endEditBlock()
+        self.content_edit.setTextCursor(cursor)
+        self.content_edit.setFocus()
+
     def _apply_color(self) -> None:
         foreground = text_color_for(self.note.color)
+        self.highlighter.configure(self.markdown, self.font_size, foreground)
         self.setStyleSheet(
             f"NoteWindow, QPlainTextEdit, QLineEdit {{ background: {self.note.color};"
             f" color: {foreground}; }}"
@@ -322,6 +365,15 @@ class NoteWindow(QWidget):
 
     def _update_window_title(self) -> None:
         self.setWindowTitle(self.note.display_title)
+
+    def _on_text_changed(self) -> None:
+        text = self.content_edit.toPlainText()
+        if text == self.last_text:
+            return
+        self.last_text = text
+        self._mark_dirty()
+        if self.history.isVisible():
+            self.differences_timer.start()
 
     def _mark_dirty(self) -> None:
         self.dirty = True

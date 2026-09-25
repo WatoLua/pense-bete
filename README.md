@@ -27,6 +27,21 @@ The interface is in French or English, following the system language.
   immediately when their window is closed, when the session ends, or when the
   application is told to stop (as at shutdown).
 
+### Markdown
+
+Notes are plain text. With **Format the notes' Markdown** checked in the **⋮**
+menu, their Markdown is shown formatted in place: headings, **bold**, *italic*,
+~~struck~~ and `code`, quotes, lists and tables, their markers dimmed but kept.
+The text stays exactly as typed, so unchecking the option loses nothing.
+
+- `- [ ]` is a task: a click on the box checks it, and a checked task is
+  struck through.
+- Enter at the end of a list item starts the next one — same bullet, next
+  number, a new unchecked box; Enter on an empty item ends the list.
+- A table (`| a | b |` lines) is shown in a fixed font, and its columns are
+  aligned when the cursor leaves it.
+- The right-click menu inserts a task list or a table.
+
 ### History
 
 Every save is committed to the note's own local git repository, so the whole

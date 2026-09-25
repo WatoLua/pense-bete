@@ -96,6 +96,10 @@ class MainWindow(QWidget):
         self.background_action.setCheckable(True)
         self.background_action.setChecked(session.get("background", False))
         self.background_action.toggled.connect(self._set_background)
+        self.markdown_action = options_menu.addAction(tr("markdown"))
+        self.markdown_action.setCheckable(True)
+        self.markdown_action.setChecked(session.get("markdown", False))
+        self.markdown_action.toggled.connect(self._set_markdown)
         sort_menu = options_menu.addMenu(tr("sort_by"))
         sort_group = QActionGroup(sort_menu)
         for key in SORT_ORDERS:
@@ -170,6 +174,12 @@ class MainWindow(QWidget):
         content = window.content_edit.toPlainText() if window is not None else note.content
         text = searchable(f"{note.title}\n{content}")
         return all(word in text for word in words)
+
+    def _set_markdown(self, enabled: bool) -> None:
+        self.session.set("markdown", enabled)
+        self.session.write()
+        for window in self.windows.values():
+            window.set_markdown(enabled)
 
     def sort_order(self) -> str:
         order = self.session.get("sort", "created")
@@ -299,6 +309,7 @@ class MainWindow(QWidget):
                 window.restoreGeometry(geometry)
             window.set_on_top(note_id in self.session.get("on_top", []))
             window.set_font_size(self.session.get("font_sizes", {}).get(note_id, DEFAULT_FONT_SIZE))
+            window.set_markdown(self.markdown_action.isChecked())
             self.windows[note_id] = window
         window.show()
         window.raise_()
