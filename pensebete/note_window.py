@@ -1,0 +1,341 @@
+"""The window of one note, and its history panel."""
+
+import subprocess
+
+from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QColorDialog,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .config import APP_NAME, AUTOSAVE_DELAY_MS, PALETTE
+from .i18n import tr
+from .storage import Note, NoteStore, Version
+from .style import color_icon, pin_icon, text_color_for
+
+
+class HistoryPanel(QFrame):
+    """Read-only view of a note's previous versions, browsed from a dated list or arrows."""
+
+    restore_requested = Signal(object)  # Version
+    copy_requested = Signal(object)  # Version
+    close_requested = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.versions: list[Version] = []
+
+        self.older_button = QToolButton()
+        self.older_button.setText("◀")
+        self.older_button.setToolTip(tr("history_older"))
+        self.older_button.clicked.connect(lambda: self.select(self.combo.currentIndex() + 1))
+        self.newer_button = QToolButton()
+        self.newer_button.setText("▶")
+        self.newer_button.setToolTip(tr("history_newer"))
+        self.newer_button.clicked.connect(lambda: self.select(self.combo.currentIndex() - 1))
+        self.combo = QComboBox()
+        # Long titles must not widen the panel at the expense of the note beside it.
+        self.combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo.setMinimumContentsLength(12)
+        self.combo.currentIndexChanged.connect(self._show)
+        self.position = QLabel()
+
+        self.title = QLabel()
+        self.title.setObjectName("historyTitle")
+        self.title.setWordWrap(True)
+        self.content = QPlainTextEdit()
+        self.content.setReadOnly(True)
+
+        self.restore_button = QPushButton(tr("history_restore"))
+        self.restore_button.setToolTip(tr("history_restore_tip"))
+        self.restore_button.clicked.connect(lambda: self.restore_requested.emit(self.current()))
+        self.copy_button = QPushButton(tr("history_copy"))
+        self.copy_button.setToolTip(tr("history_copy_tip"))
+        self.copy_button.clicked.connect(lambda: self.copy_requested.emit(self.current()))
+        close_button = QToolButton()
+        close_button.setText("✕")
+        close_button.setToolTip(tr("history_close"))
+        close_button.clicked.connect(self.close_requested)
+
+        navigation = QHBoxLayout()
+        navigation.addWidget(self.older_button)
+        navigation.addWidget(self.combo, 1)
+        navigation.addWidget(self.newer_button)
+        navigation.addWidget(self.position)
+        navigation.addWidget(close_button)
+        actions = QHBoxLayout()
+        actions.addWidget(self.restore_button)
+        actions.addWidget(self.copy_button)
+        actions.addStretch()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.addLayout(navigation)
+        layout.addWidget(self.title)
+        layout.addWidget(self.content, 1)
+        layout.addLayout(actions)
+
+    def set_versions(self, versions: list[Version]) -> None:
+        """Fill the list, keeping the selected version when it is still there."""
+        selected = self.current().commit if self.current() else None
+        self.versions = versions
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        for index, version in enumerate(versions):
+            title = version.title.strip() or tr("untitled")
+            label = f"{version.date} — {title}"
+            if index == 0:
+                label += f" ({tr('history_current')})"
+            self.combo.addItem(color_icon(version.color), label)
+        self.combo.blockSignals(False)
+        commits = [version.commit for version in versions]
+        # Opening on the version before the current one: that is what history is looked for.
+        self.select(commits.index(selected) if selected in commits else min(1, len(versions) - 1))
+
+    def current(self) -> Version | None:
+        index = self.combo.currentIndex()
+        return self.versions[index] if 0 <= index < len(self.versions) else None
+
+    def select(self, index: int) -> None:
+        if 0 <= index < len(self.versions):
+            self.combo.setCurrentIndex(index)
+        self._show()
+
+    def _show(self) -> None:
+        version = self.current()
+        index = self.combo.currentIndex()
+        self.older_button.setEnabled(version is not None and index < len(self.versions) - 1)
+        self.newer_button.setEnabled(version is not None and index > 0)
+        self.restore_button.setEnabled(version is not None and index > 0)
+        self.copy_button.setEnabled(version is not None)
+        if version is None:
+            self.position.clear()
+            self.title.setText(tr("history_empty"))
+            self.content.clear()
+            return
+        self.position.setText(f"{len(self.versions) - index} / {len(self.versions)}")
+        self.title.setText(version.title.strip() or tr("untitled"))
+        self.content.setPlainText(version.content)
+        foreground = text_color_for(version.color)
+        self.setStyleSheet(
+            f"QPlainTextEdit, QLabel#historyTitle {{ background: {version.color};"
+            f" color: {foreground}; border: none; font-size: 13px; }}"
+            " QLabel#historyTitle { font-weight: bold; font-size: 14px; padding: 2px; }"
+        )
+
+
+class NoteWindow(QWidget):
+    """Editor window for a single note."""
+
+    changed = Signal(object)  # title or color changed, the list must be refreshed
+    closing = Signal(object)  # the window is closing, after its note was saved
+    copy_requested = Signal(object)  # Version to copy into a new note
+    on_top_changed = Signal(object)  # the "keep on top" button was toggled
+
+    def __init__(self, note: Note, store: NoteStore):
+        super().__init__()
+        self.note = note
+        self.store = store
+        self.dirty = False
+        self.discarded = False
+        self.geometry_before_history: QByteArray | None = None
+
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(AUTOSAVE_DELAY_MS)
+        self.timer.timeout.connect(self.save)
+
+        self.title_edit = QLineEdit(note.title)
+        self.title_edit.setPlaceholderText(tr("title_placeholder"))
+        self.title_edit.textChanged.connect(self._on_title_changed)
+
+        self.color_button = QToolButton()
+        self.color_button.setText(tr("color"))
+        self.color_button.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.color_button)
+        for name, color in PALETTE.items():
+            action = QAction(color_icon(color), tr(name), menu)
+            action.triggered.connect(lambda _=False, c=color: self.set_color(c))
+            menu.addAction(action)
+        menu.addSeparator()
+        menu.addAction(tr("other_color"), self._choose_custom_color)
+        self.color_button.setMenu(menu)
+
+        self.content_edit = QPlainTextEdit(note.content)
+        self.content_edit.setPlaceholderText(tr("content_placeholder"))
+        self.content_edit.textChanged.connect(self._mark_dirty)
+
+        self.on_top_button = QToolButton()
+        self.on_top_button.setCheckable(True)
+        self.on_top_button.setIcon(pin_icon())
+        self.on_top_button.setIconSize(QSize(22, 22))
+        self.on_top_button.setToolTip(tr("on_top"))
+        self.on_top_button.toggled.connect(self._on_top_toggled)
+
+        self.history_button = QToolButton()
+        self.history_button.setText(tr("history"))
+        self.history_button.setCheckable(True)
+        self.history_button.toggled.connect(self._set_history_open)
+
+        self.history = HistoryPanel()
+        self.history.hide()
+        self.history.restore_requested.connect(self.restore_version)
+        self.history.copy_requested.connect(self.copy_requested)
+        self.history.close_requested.connect(lambda: self.history_button.setChecked(False))
+        for keys, step in (("Alt+Left", 1), ("Alt+Right", -1)):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.activated.connect(
+                lambda step=step: self.history.isVisible()
+                and self.history.select(self.history.combo.currentIndex() + step))
+
+        header = QHBoxLayout()
+        header.addWidget(self.title_edit)
+        header.addWidget(self.history_button)
+        header.addWidget(self.color_button)
+        header.addWidget(self.on_top_button)
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.addLayout(header)
+        editor_layout.addWidget(self.content_edit)
+        # Past on the left, present on the right.
+        self.splitter = QSplitter()
+        self.splitter.addWidget(self.history)
+        self.splitter.addWidget(editor)
+        self.splitter.setChildrenCollapsible(False)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.splitter)
+
+        self.resize(320, 300)
+        self._apply_color()
+        self._update_window_title()
+
+    def _on_title_changed(self, text: str) -> None:
+        self.note.title = text
+        self._update_window_title()
+        self._mark_dirty()
+        self.changed.emit(self.note)
+
+    def _choose_custom_color(self) -> None:
+        color = QColorDialog.getColor(QColor(self.note.color), self, tr("note_color"))
+        if color.isValid():
+            self.set_color(color.name())
+
+    def set_color(self, color: str) -> None:
+        if color == self.note.color:
+            return
+        self.note.color = color
+        self._apply_color()
+        self._mark_dirty()
+        self.changed.emit(self.note)
+
+    def _apply_color(self) -> None:
+        foreground = text_color_for(self.note.color)
+        self.setStyleSheet(
+            f"NoteWindow, QPlainTextEdit, QLineEdit {{ background: {self.note.color};"
+            f" color: {foreground}; }}"
+            " QLineEdit { font-weight: bold; border: none; font-size: 14px; }"
+            " QPlainTextEdit { border: none; font-size: 13px; }"
+        )
+
+    def _update_window_title(self) -> None:
+        self.setWindowTitle(self.note.display_title)
+
+    def _mark_dirty(self) -> None:
+        self.dirty = True
+        self.timer.start()  # restarting it delays the save until 10 s of inactivity
+
+    def save(self, message: str | None = None) -> None:
+        self.timer.stop()
+        if not self.dirty or self.discarded:
+            return
+        self.note.content = self.content_edit.toPlainText()
+        try:
+            self.store.save(self.note, message or f'Update "{self.note.display_title}"')
+        except (OSError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("save_failed", error=error))
+            return
+        self.dirty = False
+        if self.history.isVisible():
+            self._load_history()
+
+    @property
+    def history_open(self) -> bool:
+        return self.geometry_before_history is not None
+
+    def session_geometry(self) -> QByteArray:
+        """The geometry to restore next time: the history panel's widening is not kept."""
+        return self.geometry_before_history or self.saveGeometry()
+
+    def _set_history_open(self, opened: bool) -> None:
+        if opened == self.history_open:
+            return
+        if opened:
+            self.save()  # so that the current text is the newest version listed
+            self.geometry_before_history = self.saveGeometry()
+            self.history.show()
+            self._load_history()
+            if not self.isMaximized():
+                self.resize(max(self.width() * 2, 640), self.height())
+            self.splitter.setSizes([self.width() // 2, self.width() // 2])
+        else:
+            width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
+            self.history.hide()
+            self.geometry_before_history = None
+            if not self.isMaximized():
+                self.resize(width, self.height())
+
+    def set_on_top(self, on_top: bool) -> None:
+        self.on_top_button.blockSignals(True)
+        self.on_top_button.setChecked(on_top)
+        self.on_top_button.blockSignals(False)
+        if on_top == bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
+            return
+        # Changing the flags recreates the native window, which then needs showing again
+        # where it was.
+        visible, geometry = self.isVisible(), self.saveGeometry()
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on_top)
+        if visible:
+            self.restoreGeometry(geometry)
+            self.show()
+
+    def _on_top_toggled(self, on_top: bool) -> None:
+        self.set_on_top(on_top)
+        self.on_top_changed.emit(self)
+
+    def _load_history(self) -> None:
+        try:
+            self.history.set_versions(self.store.history(self.note))
+        except (OSError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("history_failed", error=error))
+
+    def restore_version(self, version: Version) -> None:
+        """Overwrite the note with a previous version; the overwritten text stays in history."""
+        self.title_edit.setText(version.title)
+        self.set_color(version.color)
+        self.content_edit.setPlainText(version.content)
+        self.dirty = True
+        self.save(f'Restore "{self.note.display_title}" from {version.commit[:7]}')
+
+    def discard(self) -> None:
+        """Close without saving, for a note that is being deleted."""
+        self.discarded = True
+        self.timer.stop()
+        self.close()
+
+    def closeEvent(self, event) -> None:
+        self.save()
+        self.closing.emit(self)
+        super().closeEvent(event)

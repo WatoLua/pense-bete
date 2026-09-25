@@ -45,6 +45,7 @@ BIN_LINK="$HOME/.local/bin/$APP_ID"
 DATA_DIR="${PENSE_BETE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
 FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh)
+PACKAGE=pensebete
 
 # Messages are in French when the system locale is French, in English otherwise.
 case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
@@ -180,6 +181,10 @@ install() {
         for file in "${FILES[@]}"; do
             cp -- "$SOURCE_DIR/$file" "$target/"
         done
+        # Replaced as a whole, so that no module of an earlier version is left behind.
+        rm -rf -- "${target:?}/$PACKAGE"
+        mkdir -- "$target/$PACKAGE"
+        cp -- "$SOURCE_DIR/$PACKAGE"/*.py "$target/$PACKAGE/"
     fi
     chmod +x "$target/pense-bete" "$target/pense_bete.py" "$target/install.sh"
     # The installed commit, which the application compares with the repository to offer updates.
