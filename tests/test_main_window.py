@@ -296,3 +296,14 @@ def test_ctrl_w_closes_the_list_as_alt_f4_does(qtbot, main_window):
 
     assert not main_window.isVisible()
     assert not main_window.quitting  # kept running in the background, as asked
+
+
+def test_an_update_in_the_background_says_which_version_it_installed(main_window, monkeypatch):
+    messages = []
+    main_window.background_action.setChecked(True)
+    main_window.hide()
+    monkeypatch.setattr(main_window.tray, "showMessage", lambda *args: messages.append(args[1]))
+
+    main_window._on_auto_updated("v1.2.0", "Notes")
+
+    assert messages and "v1.2.0" in messages[0]

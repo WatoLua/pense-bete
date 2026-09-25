@@ -45,7 +45,7 @@ BIN_LINK="$HOME/.local/bin/$APP_ID"
 # Where the application keeps its data, as pense_bete.py computes it.
 DATA_DIR="${PENSE_BETE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
-FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh)
+FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh LICENSE)
 PACKAGE=pensebete
 
 # Messages are in French when the system locale is French, in English otherwise.
@@ -203,6 +203,9 @@ install() {
     # The installed commit, which the application compares with the repository to offer updates.
     if [[ ! -e "$target/.git" ]]; then
         git -C "$SOURCE_DIR" rev-parse HEAD > "$target/.version" 2>/dev/null || rm -f -- "$target/.version"
+        # And the release it is, when the commit is one, for the About window.
+        git -C "$SOURCE_DIR" describe --tags --exact-match --match 'v[0-9]*' HEAD \
+            > "$target/.release" 2>/dev/null || rm -f -- "$target/.release"
     fi
 
     info "$(t "Adding the entry to the applications menu" "Ajout de l'entrée dans le menu des applications")"

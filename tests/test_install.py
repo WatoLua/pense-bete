@@ -128,6 +128,8 @@ def test_the_standalone_installer_installs_the_newest_release(home, tagged_repo)
 
     assert "v1.10.0" in result.stdout
     assert (target / ".version").read_text().strip() == commits["v1.10.0"]
+    assert (target / ".release").read_text().strip() == "v1.10.0"
+    assert (target / "LICENSE").is_file()
     assert (target / "pensebete" / "app.py").is_file()
 
 
@@ -144,3 +146,4 @@ def test_the_standalone_installer_falls_back_to_the_latest_commit(home, tmp_path
 
     assert "no release" in result.stderr
     assert (target / "pense_bete.py").is_file()
+    assert not (target / ".release").exists()  # not a release: no version to show

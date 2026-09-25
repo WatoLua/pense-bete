@@ -15,6 +15,7 @@ def installed(tmp_path, monkeypatch):
     version = tmp_path / ".version"
     version.write_text("abc\n")
     monkeypatch.setattr(updates, "VERSION_FILE", version)
+    monkeypatch.setattr(updates, "RELEASE_FILE", tmp_path / ".release")
     monkeypatch.setattr(updates, "APP_DIR", tmp_path)
     return tmp_path
 
@@ -95,3 +96,38 @@ def test_a_clone_is_not_updated(installed):
     assert updates.can_update()
     (installed / ".git").mkdir()
     assert not updates.can_update()
+
+
+def test_release_notes_are_the_message_of_an_annotated_tag(tagged_repo, monkeypatch):
+    repo, _ = tagged_repo
+    monkeypatch.setattr(updates, "REPO_URL", str(repo))
+
+    assert updates.release_notes("v1.10.0") == "Release"
+    assert updates.release_notes("v1.9.0") == ""  # lightweight: no message of its own
+    assert updates.release_notes("v9.9.9") == ""  # missing: no notes, no failure
+
+
+def test_the_installed_release_and_its_date(installed):
+    (installed / ".release").write_text("v1.2.3\n")
+    (installed / ".version").write_text("0123456789abcdef\n")
+
+    version = updates.installed_version()
+
+    assert (version.release, version.commit) == ("v1.2.3", "0123456")
+    assert version.installed is not None and not version.branch
+
+
+def test_a_clone_reports_its_branch_commit_and_changes(tmp_path, monkeypatch):
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+    git("init", "--quiet", "--initial-branch", "work")
+    (tmp_path / "file").write_text("x")
+    git("add", "file")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "c")
+    monkeypatch.setattr(updates, "APP_DIR", tmp_path)
+
+    version = updates.installed_version()
+    assert (version.branch, len(version.commit), version.modified) == ("work", 7, False)
+
+    (tmp_path / "file").write_text("changed")
+    assert updates.installed_version().modified

@@ -3,12 +3,14 @@
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from .config import APP_DIR, REPO_URL, VERSION_FILE
+from .config import APP_DIR, RELEASE_FILE, REPO_URL, VERSION_FILE
 
 
 def run(*args: str) -> subprocess.CompletedProcess:
@@ -65,8 +67,7 @@ def latest_release(runner=run) -> tuple[str, str] | None:
 def update_available(runner=run) -> str | None:
     """The tag of the newest release when it is not the installed commit."""
     release = latest_release(runner)
-    installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
-    if release is None or release[1] == installed:
+    if release is None or release[1] == _read(VERSION_FILE):
         return None
     return release[0]
 
@@ -81,3 +82,53 @@ def install_release(tag: str, runner=run) -> None:
             result = runner("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
     if result.returncode:
         raise RuntimeError(command_error(result))
+
+
+def release_notes(tag: str, runner=run) -> str:
+    """The message of a release's annotated tag, "" for a tag without one or when it
+    cannot be read: the notes are a bonus, never a reason for an update to fail."""
+    with tempfile.TemporaryDirectory() as temporary:
+        if runner("git", "init", "--quiet", "--bare", temporary).returncode:
+            return ""
+        ref = f"refs/tags/{tag}"
+        if runner("git", "-C", temporary, "fetch", "--quiet", "--depth", "1", "--",
+                  REPO_URL, f"{ref}:{ref}").returncode:
+            return ""
+        result = runner("git", "-C", temporary, "for-each-ref", "--format=%(objecttype)",
+                        ref)
+        if result.returncode or result.stdout.strip() != "tag":
+            return ""  # a lightweight tag: its "message" would be the commit's
+        result = runner("git", "-C", temporary, "for-each-ref", "--format=%(contents)", ref)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+
+@dataclass
+class InstalledVersion:
+    """What runs: a release, or the commit of a clone in development."""
+
+    release: str = ""  # vX.Y.Z, "" when unknown
+    commit: str = ""  # abbreviated
+    installed: datetime | None = None  # when install.sh put it in place
+    branch: str = ""  # in development only
+    modified: bool = False  # in development: changes not committed
+
+
+def installed_version(runner=run) -> InstalledVersion:
+    if (APP_DIR / ".git").exists():
+        branch = runner("git", "-C", str(APP_DIR), "rev-parse", "--abbrev-ref", "HEAD")
+        commit = runner("git", "-C", str(APP_DIR), "rev-parse", "--short", "HEAD")
+        status = runner("git", "-C", str(APP_DIR), "status", "--porcelain")
+        return InstalledVersion(commit=commit.stdout.strip(), branch=branch.stdout.strip(),
+                                modified=bool(status.stdout.strip()))
+    installed = None
+    if VERSION_FILE.exists():
+        installed = datetime.fromtimestamp(VERSION_FILE.stat().st_mtime)
+    return InstalledVersion(release=_read(RELEASE_FILE), commit=_read(VERSION_FILE)[:7],
+                            installed=installed)
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""

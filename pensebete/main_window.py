@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .about import AboutDialog, ShortcutsDialog
 from .archive import ArchiveError, export_notes, import_notes
 from .config import (
     APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH,
@@ -39,7 +40,9 @@ from .session import Session
 from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
-from .updates import can_update, command_error, install_release, run_command, update_available
+from .updates import (
+    can_update, command_error, install_release, release_notes, run_command, update_available,
+)
 
 
 # The orders of the list, as arguments to sorted().
@@ -57,7 +60,8 @@ def searchable(text: str) -> str:
 
 
 class MainWindow(QWidget):
-    auto_updated = Signal()  # emitted from the update thread, handled in the interface one
+    # (release, notes): emitted from the update thread, handled in the interface one.
+    auto_updated = Signal(str, str)
 
     def __init__(self, store: NoteStore, session: Session, server: QLocalServer):
         super().__init__()
@@ -76,6 +80,7 @@ class MainWindow(QWidget):
         self.search.returnPressed.connect(self._open_first_match)
         QShortcut(QKeySequence.Find, self, self._focus_search)
         QShortcut(QKeySequence("Ctrl+W"), self, self.close)
+        QShortcut(QKeySequence("F1"), self, self.show_shortcuts)
         QShortcut(QKeySequence(Qt.Key_Escape), self.search, self.search.clear)
 
         self.list = QListWidget()
@@ -122,6 +127,10 @@ class MainWindow(QWidget):
         self.auto_update_action.toggled.connect(self._set_auto_update)
         self.auto_updated.connect(self._on_auto_updated)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
+        options_menu.addSeparator()
+        shortcuts_action = options_menu.addAction(tr("shortcuts_menu"), self.show_shortcuts)
+        shortcuts_action.setShortcut(QKeySequence("F1"))
+        options_menu.addAction(tr("about_menu"), self.show_about)
         options_menu.addSeparator()
         if DEV_MODE:
             # Picks up changes to the code without closing and reopening by hand.
@@ -304,6 +313,7 @@ class MainWindow(QWidget):
             window.copy_requested.connect(self.create_note)
             window.on_top_changed.connect(self._on_note_on_top_changed)
             window.font_size_changed.connect(self._on_note_font_size_changed)
+            window.shortcuts_requested.connect(self.show_shortcuts)
             window.setAttribute(Qt.WA_DeleteOnClose)
             geometry = self.session.geometry(note_id)
             if geometry is not None:
@@ -435,8 +445,11 @@ class MainWindow(QWidget):
             if release is None:
                 QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
-            if QMessageBox.question(self, tr("update"), tr("update_available", version=release)
-                                    ) != QMessageBox.Yes:
+            box = QMessageBox(QMessageBox.Question, tr("update"),
+                              tr("update_available", version=release),
+                              QMessageBox.Yes | QMessageBox.No, self)
+            box.setInformativeText(release_notes(release, run_command))
+            if box.exec() != QMessageBox.Yes:
                 return
             self.save_all()
             install_release(release, run_command)
@@ -445,9 +458,18 @@ class MainWindow(QWidget):
             return
         self._offer_restart()
 
-    def _offer_restart(self) -> None:
-        if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
+    def _offer_restart(self, notes: str = "") -> None:
+        box = QMessageBox(QMessageBox.Question, tr("update"), tr("update_done"),
+                          QMessageBox.Yes | QMessageBox.No, self)
+        box.setInformativeText(notes)  # what the new version brings, when it says
+        if box.exec() == QMessageBox.Yes:
             self.restart()
+
+    def show_shortcuts(self) -> None:
+        ShortcutsDialog(self).exec()
+
+    def show_about(self) -> None:
+        AboutDialog(self).exec()
 
     def restart(self) -> None:
         """Quit, saving the session and the notes, and launch the application again."""
@@ -467,18 +489,19 @@ class MainWindow(QWidget):
                 release = update_available()
                 if release is not None:
                     install_release(release)
-                    self.auto_updated.emit()
+                    self.auto_updated.emit(release, release_notes(release))
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                 print(f"Automatic update failed: {error}", file=sys.stderr)
 
         threading.Thread(target=check_and_install, daemon=True).start()
 
-    def _on_auto_updated(self) -> None:
+    def _on_auto_updated(self, release: str, notes: str) -> None:
         # The files are replaced; this process keeps running the version it loaded.
         if self.tray.isVisible() and not self.isVisible():
-            self.tray.showMessage(APP_NAME, tr("auto_updated"), QIcon(str(ICON_PATH)))
+            self.tray.showMessage(APP_NAME, tr("auto_updated", version=release),
+                                  QIcon(str(ICON_PATH)))
         else:
-            self._offer_restart()
+            self._offer_restart(notes)
 
     def uninstall_app(self) -> None:
         box = QMessageBox(QMessageBox.Question, tr("uninstall"), tr("confirm_uninstall"),

@@ -21,8 +21,10 @@ SESSION_FILE = (
 RECENT_NOTES = 3
 DEFAULT_RETENTION_DAYS = 30
 ICON_PATH = APP_DIR / ("icon-dev.svg" if DEV_MODE else "icon.svg")
-# Written by install.sh: the installed commit of the repository.
+# Written by install.sh: the installed commit of the repository, and its release tag
+# when it is one.
 VERSION_FILE = APP_DIR / ".version"
+RELEASE_FILE = APP_DIR / ".release"
 REPO_URL = os.environ.get("PENSE_BETE_REPO", "https://github.com/WatoLua/pense-bete.git")
 AUTOSAVE_DELAY_MS = 10_000
 DEFAULT_COLOR = "#fff59d"

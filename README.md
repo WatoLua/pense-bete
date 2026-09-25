@@ -86,6 +86,16 @@ erased at once. The delay before erasing is set there, 30 days by default;
 expired notes are erased at launch and when that list opens. Erasing a note
 removes its repository, and so its history.
 
+### About and shortcuts
+
+**About…**, in the **⋮** menu, shows the installed version and when it was
+installed (in development: the branch, the commit and whether the clone has
+uncommitted changes), a button to check for updates, the application and notes
+directories with a button to open each, and the technical information a bug
+report needs — system, display server, Python, PySide6 and Qt versions — with a
+button to copy it. **Keyboard shortcuts…** (F1, from the list or a note) lists
+every shortcut.
+
 ### Backup
 
 **Export the notes…**, in the **⋮** menu, writes every note, deleted ones
@@ -209,12 +219,15 @@ also available as a command. To remove the entry: `./install.sh --uninstall --de
 
 Installations and updates follow the highest `vX.Y.Z` tag, compared number by
 number (`v1.10.0` is newer than `v1.9.0`); other tags are ignored. To publish the
-commit on `main` as a new version:
+commit on `main` as a new version, with the notes that the update shows before
+installing it:
 
 ```sh
-git tag v1.2.0
+git tag -a v1.2.0 -m "Search in the notes, sorted list"
 git push origin v1.2.0
 ```
+
+A tag made without `-a` works as well, only without notes.
 
 Until the repository has a release, the installer takes the latest commit of the
 default branch, and the application finds no update.

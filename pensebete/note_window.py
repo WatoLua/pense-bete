@@ -199,6 +199,7 @@ class NoteWindow(QWidget):
     closing = Signal(object)  # the window is closing, after its note was saved
     copy_requested = Signal(object)  # Version to copy into a new note
     on_top_changed = Signal(object)  # the "keep on top" button was toggled
+    shortcuts_requested = Signal()  # F1: the list of keyboard shortcuts
 
     def __init__(self, note: Note, store: NoteStore):
         super().__init__()
@@ -300,6 +301,7 @@ class NoteWindow(QWidget):
             QShortcut(QKeySequence(keys), self, lambda step=step: self.zoom(step))
         QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.set_font_size(DEFAULT_FONT_SIZE))
         QShortcut(QKeySequence.Save, self, lambda: self.save())
+        QShortcut(QKeySequence("F1"), self, self.shortcuts_requested)
         QShortcut(QKeySequence("Ctrl+W"), self, self.close)
         QShortcut(QKeySequence("Ctrl+L"), self, self.insert_tasks)
         QShortcut(QKeySequence("Ctrl+T"), self, self.insert_table)
