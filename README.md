@@ -100,7 +100,13 @@ uncommitted changes), a button to check for updates, the application and notes
 directories with a button to open each, and the technical information a bug
 report needs — system, display server, Python, PySide6 and Qt versions — with a
 button to copy it. **Keyboard shortcuts…** (F1, from the list or a note) lists
-every shortcut.
+every shortcut, and changes them: **Change…**, or a double click, records new
+keys, a second key if wanted; **Turn off** leaves an action without keys;
+**Default** and **Reset all** put the defaults back. Mouse gestures — Ctrl with
+the wheel, Alt and a drag, a click on a task's box — are turned on or off with
+their checkbox. A key another action already has, where both would work, is
+refused. Changes are shown in bold and kept for the next launches, on this
+machine.
 
 ### Backup
 

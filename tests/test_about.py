@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import QApplication
 
 from pensebete import about
-from pensebete.about import SHORTCUTS, AboutDialog, ShortcutsDialog, key_names
+from pensebete.about import AboutDialog, ShortcutsDialog, key_names
+from pensebete.shortcuts import ACTIONS
 
 
 def test_the_about_window_shows_the_version_and_copies_the_information(main_window, qtbot):
@@ -21,12 +22,12 @@ def test_every_shortcut_is_listed(qtbot):
     dialog = ShortcutsDialog()
     qtbot.addWidget(dialog)
 
-    rows = sum(1 + len(shortcuts) for _, shortcuts in SHORTCUTS)
-    assert dialog.tree.topLevelItemCount() == rows
+    sections = len({action.section for action in ACTIONS})
+    assert dialog.tree.topLevelItemCount() == len(ACTIONS) + sections
 
 
-def test_key_names_mix_key_sequences_and_words():
-    assert key_names(["Ctrl+Y", "@sc_ctrl_wheel"]) == "Ctrl+Y / Ctrl+wheel"
+def test_key_names_are_the_system_names_with_keyboard_words():
+    assert key_names(["Ctrl+Y", "Ctrl+Return"]) == "Ctrl+Y / Ctrl+Enter"
 
 
 def test_the_repository_page_comes_from_its_url(monkeypatch):

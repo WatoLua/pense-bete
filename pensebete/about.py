@@ -11,10 +11,14 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -23,53 +27,11 @@ from PySide6.QtWidgets import (
 
 from .config import APP_DIR, APP_NAME, DATA_DIR, DEV_MODE, ICON_PATH, REPO_URL
 from .i18n import tr
+from .shortcuts import ACTIONS, BY_ID, normalized, settings
 from .updates import can_update, git_version, installed_version
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
-
-# (section, [(keys, description)]): keys are key sequences, shown as the system names
-# them, or "@" and a translation key for what a key sequence cannot say.
-SHORTCUTS = [
-    ("sc_section_list", [
-        (["Ctrl+F"], "sc_search"),
-        (["Return"], "sc_open_first"),
-        (["Esc"], "sc_clear_search"),
-        (["Ctrl+W"], "sc_close_list"),
-        (["F1"], "sc_shortcuts"),
-    ]),
-    ("sc_section_note", [
-        (["Ctrl+S"], "sc_save"),
-        (["Ctrl+W"], "sc_close_note"),
-        (["Ctrl+Z"], "sc_undo"),
-        (["Ctrl+Y", "Ctrl+Shift+Z"], "sc_redo"),
-        (["Ctrl+Shift+C"], "sc_copy_all"),
-        (["Ctrl+Del"], "sc_clear_all"),
-        (["@sc_ctrl_wheel", "Ctrl++", "Ctrl+-"], "sc_zoom"),
-        (["Ctrl+0"], "sc_zoom_reset"),
-        (["@sc_alt_left_drag"], "sc_move"),
-        (["@sc_alt_right_drag"], "sc_resize"),
-        (["Alt+Left", "Alt+Right"], "sc_history"),
-    ]),
-    ("sc_section_markdown", [
-        (["Ctrl+L"], "sc_insert_task"),
-        (["Ctrl+T"], "sc_insert_table"),
-        (["@sc_click_box", "Ctrl+Space"], "sc_toggle_task"),
-        (["Return"], "sc_continue_list"),
-    ]),
-    ("sc_section_table", [
-        (["Tab", "Shift+Tab"], "sc_next_cell"),
-        (["Ctrl+Return"], "sc_add_row"),
-        (["Ctrl+Shift+Return"], "sc_add_column"),
-        (["Ctrl+Backspace"], "sc_delete_row"),
-        (["Ctrl+Shift+Backspace"], "sc_delete_column"),
-    ]),
-]
-
-
-def key_names(keys: list[str]) -> str:
-    return " / ".join(tr(key[1:]) if key.startswith("@") else key_name(key) for key in keys)
-
 
 def key_name(key: str) -> str:
     """A key sequence as the system names it, with the names of Enter and Backspace as
@@ -80,33 +42,171 @@ def key_name(key: str) -> str:
     return text
 
 
+def key_names(keys: list[str]) -> str:
+    return " / ".join(key_name(key) for key in keys)
+
+
+class KeyDialog(QDialog):
+    """Asks for an action's keys: one, and another if wanted."""
+
+    def __init__(self, action_id: str, parent=None):
+        super().__init__(parent)
+        self.action_id = action_id
+        action = BY_ID[action_id]
+        self.setWindowTitle(tr("sc_edit_title", action=tr(action.description)))
+        keys = settings.keys(action_id)
+        self.edits = []
+        form = QFormLayout()
+        for index, label in enumerate(("sc_key", "sc_other_key")):
+            edit = QKeySequenceEdit(QKeySequence(keys[index]) if index < len(keys) else QKeySequence())
+            if hasattr(edit, "setMaximumSequenceLength"):  # one key per field, Qt 6.5+
+                edit.setMaximumSequenceLength(1)
+            if hasattr(edit, "setClearButtonEnabled"):
+                edit.setClearButtonEnabled(True)
+            form.addRow(tr(label), edit)
+            self.edits.append(edit)
+        hint = QLabel(tr("sc_edit_hint"))
+        hint.setWordWrap(True)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(hint)
+        layout.addLayout(form)
+        layout.addWidget(buttons)
+
+    def keys(self) -> list[str]:
+        keys = []
+        for edit in self.edits:
+            key = normalized(edit.keySequence())
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
+    def accept(self) -> None:
+        """Only keys no other action has where this one works."""
+        for key in self.keys():
+            other = settings.conflict(self.action_id, key)
+            if other is not None:
+                QMessageBox.warning(self, tr("shortcuts_title"), tr(
+                    "sc_conflict", shortcut=key_name(key), action=tr(BY_ID[other].description)))
+                return
+        settings.set_keys(self.action_id, self.keys())
+        super().accept()
+
+
 class ShortcutsDialog(QDialog):
+    """Every shortcut and gesture, which the user can change, turn off or reset."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("shortcuts_title"))
-        self.resize(580, 660)
+        self.resize(640, 700)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
-        self.tree.setHeaderLabels([tr("sc_keys"), tr("sc_action")])
+        self.tree.setHeaderLabels([tr("sc_action"), tr("sc_keys")])
         self.tree.setRootIsDecorated(False)
-        self.tree.setSelectionMode(QTreeWidget.NoSelection)
-        for section, shortcuts in SHORTCUTS:
-            header = QTreeWidgetItem(self.tree, [tr(section)])
-            font = header.font(0)
-            font.setBold(True)
-            header.setFont(0, font)
-            header.setFirstColumnSpanned(True)
-            for keys, description in shortcuts:
-                QTreeWidgetItem(self.tree, [key_names(keys), tr(description)])
-        self.tree.resizeColumnToContents(0)
+        self.tree.itemDoubleClicked.connect(lambda item, _column: self.edit(item))
+        self.tree.itemChanged.connect(self._on_item_changed)
+        self.tree.currentItemChanged.connect(lambda *_: self._update_buttons())
+
+        self.edit_button = QPushButton(tr("sc_edit"))
+        self.edit_button.clicked.connect(lambda: self.edit(self.tree.currentItem()))
+        self.disable_button = QPushButton(tr("sc_disable"))
+        self.disable_button.clicked.connect(self.disable)
+        self.default_button = QPushButton(tr("sc_default"))
+        self.default_button.clicked.connect(self.reset)
+        reset_all_button = QPushButton(tr("sc_reset_all"))
+        reset_all_button.clicked.connect(self.reset_all)
         close_button = QPushButton(tr("close"))
         close_button.clicked.connect(self.close)
         buttons = QHBoxLayout()
+        for button in (self.edit_button, self.disable_button, self.default_button):
+            buttons.addWidget(button)
         buttons.addStretch()
+        buttons.addWidget(reset_all_button)
         buttons.addWidget(close_button)
         layout = QVBoxLayout(self)
         layout.addWidget(self.tree)
         layout.addLayout(buttons)
+        self.refresh()
+
+    def refresh(self) -> None:
+        current = self.selected()
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        section = None
+        for action in ACTIONS:
+            if action.section != section:
+                section = action.section
+                header = QTreeWidgetItem(self.tree, [tr(section)])
+                font = header.font(0)
+                font.setBold(True)
+                header.setFont(0, font)
+                header.setFirstColumnSpanned(True)
+                header.setFlags(Qt.ItemIsEnabled)
+            item = QTreeWidgetItem(self.tree, [tr(action.description)])
+            item.setData(0, Qt.UserRole, action.id)
+            if action.gesture:
+                item.setText(1, tr(action.gesture))
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(1, Qt.Checked if settings.enabled(action.id) else Qt.Unchecked)
+            else:
+                keys = settings.keys(action.id)
+                item.setText(1, key_names(keys) if keys else tr("sc_disabled"))
+            if not settings.is_default(action.id):  # what the user changed stands out
+                for column in (0, 1):
+                    font = item.font(column)
+                    font.setBold(True)
+                    item.setFont(column, font)
+            if action.id == current:
+                self.tree.setCurrentItem(item)
+        self.tree.blockSignals(False)
+        self.tree.resizeColumnToContents(0)
+        self._update_buttons()
+
+    def selected(self) -> str | None:
+        item = self.tree.currentItem()
+        return item.data(0, Qt.UserRole) if item is not None else None
+
+    def _update_buttons(self) -> None:
+        action_id = self.selected()
+        keys = action_id is not None and not BY_ID[action_id].gesture
+        self.edit_button.setEnabled(keys)
+        self.disable_button.setEnabled(keys and settings.enabled(action_id))
+        self.default_button.setEnabled(action_id is not None and not settings.is_default(action_id))
+
+    def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        action_id = item.data(0, Qt.UserRole)
+        if action_id and BY_ID[action_id].gesture and column == 1:
+            settings.set_enabled(action_id, item.checkState(1) == Qt.Checked)
+            self.refresh()
+
+    def edit(self, item: QTreeWidgetItem | None) -> None:
+        action_id = item.data(0, Qt.UserRole) if item is not None else None
+        if action_id is None:
+            return
+        if BY_ID[action_id].gesture:
+            settings.set_enabled(action_id, not settings.enabled(action_id))
+        elif KeyDialog(action_id, self).exec() != QDialog.Accepted:
+            return
+        self.refresh()
+
+    def disable(self) -> None:
+        if self.selected() is not None:
+            settings.set_keys(self.selected(), [])
+            self.refresh()
+
+    def reset(self) -> None:
+        if self.selected() is not None:
+            settings.reset(self.selected())
+            self.refresh()
+
+    def reset_all(self) -> None:
+        if QMessageBox.question(self, tr("shortcuts_title"), tr("sc_confirm_reset_all")
+                                ) == QMessageBox.Yes:
+            settings.reset()
+            self.refresh()
 
 
 def display_server() -> str:

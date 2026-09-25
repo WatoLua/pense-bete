@@ -8,8 +8,8 @@ from pathlib import Path
 import unicodedata
 import uuid
 
-from PySide6.QtCore import QProcess, Qt, Signal
-from PySide6.QtGui import QActionGroup, QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QProcess, Qt, Signal
+from PySide6.QtGui import QActionGroup, QColor, QIcon
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,6 +37,7 @@ from .config import (
 from .i18n import tr
 from .note_window import NoteWindow
 from .session import Session
+from .shortcuts import Binding, first_key, settings
 from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
@@ -68,6 +69,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.store = store
         self.session = session
+        settings.attach(session)
         self.server = server
         self.notes: list[Note] = store.load_all()
         self.windows: dict[str, NoteWindow] = {}
@@ -78,11 +80,11 @@ class MainWindow(QWidget):
         self.search.setPlaceholderText(tr("search"))
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _text: self.refresh_list())
-        self.search.returnPressed.connect(self._open_first_match)
-        QShortcut(QKeySequence.Find, self, self._focus_search)
-        QShortcut(QKeySequence("Ctrl+W"), self, self.close)
-        QShortcut(QKeySequence("F1"), self, self.show_shortcuts)
-        QShortcut(QKeySequence(Qt.Key_Escape), self.search, self.search.clear)
+        Binding(self, "search", self._focus_search)
+        Binding(self, "close_list", self.close)
+        Binding(self, "shortcuts", self.show_shortcuts)
+        Binding(self.search, "clear_search", self.search.clear, Qt.WidgetShortcut)
+        self.search.installEventFilter(self)
 
         self.list = QListWidget()
         self.list.itemActivated.connect(lambda item: self.open_note(item.data(Qt.UserRole)))
@@ -139,8 +141,10 @@ class MainWindow(QWidget):
         self.auto_updated.connect(self._on_auto_updated)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
         options_menu.addSeparator()
-        shortcuts_action = options_menu.addAction(tr("shortcuts_menu"), self.show_shortcuts)
-        shortcuts_action.setShortcut(QKeySequence("F1"))
+        self.shortcuts_action = options_menu.addAction(tr("shortcuts_menu"), self.show_shortcuts)
+        # A method rather than a lambda: Qt disconnects it when the window goes.
+        settings.changed.connect(self._show_shortcut_keys)
+        self._show_shortcut_keys()
         options_menu.addAction(tr("about_menu"), self.show_about)
         options_menu.addSeparator()
         if DEV_MODE:
@@ -183,6 +187,16 @@ class MainWindow(QWidget):
     def _focus_search(self) -> None:
         self.search.setFocus()
         self.search.selectAll()
+
+    def _show_shortcut_keys(self) -> None:
+        self.shortcuts_action.setShortcut(first_key("shortcuts"))
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.search and event.type() == QEvent.KeyPress \
+                and settings.matches("open_first", event):
+            self._open_first_match()
+            return True
+        return super().eventFilter(watched, event)
 
     def _open_first_match(self) -> None:
         if self.list.count() and self.list.item(0).data(Qt.UserRole):

@@ -37,6 +37,14 @@ os.environ["LANG"] = "C"
 REPO_DIR = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def default_shortcuts():
+    """Every test starts with the default shortcuts, whatever the one before changed."""
+    yield
+    from pensebete.shortcuts import settings
+    settings.detach()
+
+
 @pytest.fixture
 def store(tmp_path):
     from pensebete.storage import NoteStore

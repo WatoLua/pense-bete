@@ -16,6 +16,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QPlainTextEdit
 
 from . import tables
+from .shortcuts import settings
 
 HEADING = re.compile(r"^(#{1,6})(\s+)(.*)$")
 # A task's box: "[ ]" to do, "[v]" ok, "[x]" ko.
@@ -224,13 +225,15 @@ class MarkdownEditing(QObject):
             return False
         if watched is self.editor.viewport():
             if event.type() == QEvent.MouseMove:
-                over = checkbox_at(self.editor, event.position().toPoint()) is not None
+                over = settings.enabled("click_box") \
+                    and checkbox_at(self.editor, event.position().toPoint()) is not None
                 self.editor.viewport().setCursor(Qt.PointingHandCursor if over else Qt.IBeamCursor)
             # A double click is two clicks, so it toggles twice.
             elif event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) \
                     and event.button() == Qt.LeftButton:
                 checkbox = checkbox_at(self.editor, event.position().toPoint())
-                if checkbox is not None and not event.modifiers():
+                if checkbox is not None and not event.modifiers() \
+                        and settings.enabled("click_box"):
                     toggle_checkbox(*checkbox)
                     return True
         elif event.type() == QEvent.KeyPress:
@@ -242,7 +245,7 @@ class MarkdownEditing(QObject):
 
     def _toggle_key(self, event: QKeyEvent) -> bool:
         """Ctrl+Space anywhere on a task's line turns its box to the next state."""
-        if event.key() != Qt.Key_Space or event.modifiers() != Qt.ControlModifier:
+        if not settings.matches("toggle_task", event):
             return False
         cursor = self.editor.textCursor()
         task = TASK.match(cursor.block().text())
@@ -255,7 +258,7 @@ class MarkdownEditing(QObject):
         return True
 
     def _continue_list(self, event: QKeyEvent) -> bool:
-        if event.key() not in (Qt.Key_Return, Qt.Key_Enter) or event.modifiers() & ~Qt.KeypadModifier:
+        if not settings.matches("continue_list", event):
             return False
         cursor = self.editor.textCursor()
         if cursor.hasSelection() or not cursor.atBlockEnd():
@@ -274,30 +277,25 @@ class MarkdownEditing(QObject):
         return True
 
     def _table_key(self, event: QKeyEvent) -> bool:
-        """Tab and Shift+Tab move between cells, Ctrl+Enter adds a row, Ctrl+Shift+Enter a
-        column, Ctrl+Backspace deletes the row, Ctrl+Shift+Backspace the column; elsewhere
-        than in a table, these keys do what they usually do."""
+        """The keys of a table's actions, Tab to the next cell and Ctrl+Enter for a new row
+        by default; elsewhere than in a table, these keys do what they usually do."""
         if self.table() is None:
             return False
-        key, modifiers = event.key(), event.modifiers() & ~Qt.KeypadModifier
-        enter = key in (Qt.Key_Return, Qt.Key_Enter)
-        if key == Qt.Key_Backspace and modifiers == Qt.ControlModifier:
+        if settings.matches("table_delete_row", event):
             # Taken even where it cannot delete, the header's row: deleting the word
             # before the cursor instead would be a surprise.
             if self.can_delete_row():
                 self.delete_row()
-            return True
-        if key == Qt.Key_Backspace and modifiers == Qt.ControlModifier | Qt.ShiftModifier:
+        elif settings.matches("table_delete_column", event):
             if self.can_delete_column():
                 self.delete_column()
-            return True
-        if key == Qt.Key_Tab and not modifiers:
+        elif settings.matches("table_next", event):
             self.move_to_cell(1)
-        elif key == Qt.Key_Backtab:
+        elif settings.matches("table_previous", event):
             self.move_to_cell(-1)
-        elif enter and modifiers == Qt.ControlModifier:
+        elif settings.matches("table_add_row", event):
             self.insert_row()
-        elif enter and modifiers == Qt.ControlModifier | Qt.ShiftModifier:
+        elif settings.matches("table_add_column", event):
             self.insert_column()
         else:
             return False

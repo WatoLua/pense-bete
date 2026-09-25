@@ -6,7 +6,7 @@ from datetime import datetime
 from PySide6.QtCore import (
     QByteArray, QEvent, QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal,
 )
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCursor
+from PySide6.QtGui import QAction, QColor, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -32,6 +32,7 @@ from .config import (
 from .diff import differences, utf16_ranges
 from .i18n import tr
 from .markdown import MarkdownEditing, MarkdownHighlighter
+from .shortcuts import Binding, first_key, settings
 from .storage import Note, NoteStore, Version
 from .style import color_icon, note_palette, pin_icon, pixel_font, text_color_for
 
@@ -275,11 +276,10 @@ class NoteWindow(QWidget):
         self.differences_timer.timeout.connect(self._highlight_differences)
         self.history.copy_requested.connect(self.copy_requested)
         self.history.close_requested.connect(lambda: self.history_button.setChecked(False))
-        for keys, step in (("Alt+Left", 1), ("Alt+Right", -1)):
-            shortcut = QShortcut(QKeySequence(keys), self)
-            shortcut.activated.connect(
-                lambda step=step: self.history.isVisible()
-                and self.history.select(self.history.combo.currentIndex() + step))
+        for action_id, step in (("history_older", 1), ("history_newer", -1)):
+            Binding(self, action_id,
+                    lambda step=step: self.history.isVisible()
+                    and self.history.select(self.history.combo.currentIndex() + step))
 
         header = QHBoxLayout()
         header.addWidget(self.title_edit)
@@ -303,15 +303,17 @@ class NoteWindow(QWidget):
         # Zooming, as in a browser: Ctrl with the wheel, +, - or 0 to go back to the default.
         self.content_edit.viewport().installEventFilter(self)
         self.history.content.viewport().installEventFilter(self)
-        for keys, step in ((QKeySequence.ZoomIn, 1), ("Ctrl+=", 1), (QKeySequence.ZoomOut, -1)):
-            QShortcut(QKeySequence(keys), self, lambda step=step: self.zoom(step))
-        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.set_font_size(DEFAULT_FONT_SIZE))
-        QShortcut(QKeySequence.Save, self, lambda: self.save())
-        QShortcut(QKeySequence("F1"), self, self.shortcuts_requested)
-        QShortcut(QKeySequence("Ctrl+W"), self, self.close)
-        QShortcut(QKeySequence("Ctrl+L"), self, self.insert_tasks)
-        QShortcut(QKeySequence("Ctrl+T"), self, self.insert_table)
-        QShortcut(QKeySequence("Ctrl+Shift+C"), self, self.copy_all)
+        for action_id, callback in (
+                ("zoom_in", lambda: self.zoom(1)),
+                ("zoom_out", lambda: self.zoom(-1)),
+                ("zoom_reset", lambda: self.set_font_size(DEFAULT_FONT_SIZE)),
+                ("save", lambda: self.save()),
+                ("shortcuts", self.shortcuts_requested),
+                ("close_note", self.close),
+                ("insert_task", self.insert_tasks),
+                ("insert_table", self.insert_table),
+                ("copy_all", self.copy_all)):
+            Binding(self, action_id, callback)
         # Ctrl+Delete is a key of the editor itself, which deletes the next word: it is
         # taken before the editor sees it.
         self.content_edit.installEventFilter(self)
@@ -375,29 +377,29 @@ class NoteWindow(QWidget):
                 action.triggered.disconnect()
                 action.triggered.connect(editing.undo if action.objectName() == "edit-undo"
                                          else editing.redo)
-                if action.objectName() == "edit-redo":
-                    action.setShortcut(QKeySequence("Ctrl+Y"))
+                action.setShortcut(first_key("undo" if action.objectName() == "edit-undo"
+                                             else "redo"))
         if self.markdown and editing.table() is not None:
             menu.addSeparator()
-            for label, shortcut, action, enabled in (
-                    ("table_insert_row", "Ctrl+Return", editing.insert_row, True),
-                    ("table_insert_column", "Ctrl+Shift+Return", editing.insert_column, True),
-                    ("table_delete_row", "Ctrl+Backspace", editing.delete_row,
+            for label, action_id, action, enabled in (
+                    ("table_insert_row", "table_add_row", editing.insert_row, True),
+                    ("table_insert_column", "table_add_column", editing.insert_column, True),
+                    ("table_delete_row", "table_delete_row", editing.delete_row,
                      editing.can_delete_row()),
-                    ("table_delete_column", "Ctrl+Shift+Backspace", editing.delete_column,
+                    ("table_delete_column", "table_delete_column", editing.delete_column,
                      editing.can_delete_column())):
                 item = menu.addAction(tr(label), action)
                 item.setEnabled(enabled)
                 # Shown in the menu; the editor handles the keys itself.
-                item.setShortcut(QKeySequence(shortcut))
+                item.setShortcut(first_key(action_id))
         menu.addSeparator()
-        for label, shortcut, action in (
-                ("insert_tasks", "Ctrl+L", self.insert_tasks),
-                ("insert_table", "Ctrl+T", self.insert_table),
-                ("copy_all", "Ctrl+Shift+C", self.copy_all),
-                ("clear_all", "Ctrl+Del", self.clear_all)):
+        for label, action_id, action in (
+                ("insert_tasks", "insert_task", self.insert_tasks),
+                ("insert_table", "insert_table", self.insert_table),
+                ("copy_all", "copy_all", self.copy_all),
+                ("clear_all", "clear_all", self.clear_all)):
             item = menu.addAction(tr(label), action)
-            item.setShortcut(QKeySequence(shortcut))  # shown only: the window handles the keys
+            item.setShortcut(first_key(action_id))  # shown only: the window handles the keys
         menu.exec(self.content_edit.viewport().mapToGlobal(position))
         menu.deleteLater()
 
@@ -452,19 +454,20 @@ class NoteWindow(QWidget):
         if self._move_or_resize(event):
             return True
         if watched is self.content_edit and event.type() == QEvent.KeyPress:
-            modifiers = event.modifiers() & ~Qt.KeypadModifier
-            if event.key() == Qt.Key_Delete and modifiers == Qt.ControlModifier:
+            if settings.matches("clear_all", event):
                 self.clear_all()
                 return True
-            # Ctrl+Y redoes as well as Ctrl+Shift+Z, the usual key on Linux.
-            if event.matches(QKeySequence.Undo):
+            if settings.matches("undo", event):
                 self.markdown_editing.undo()
                 return True
-            if event.matches(QKeySequence.Redo) \
-                    or (event.key() == Qt.Key_Y and modifiers == Qt.ControlModifier):
+            if settings.matches("redo", event):
                 self.markdown_editing.redo()
                 return True
-        if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
+            # The editor's own undo and redo keys do nothing once rebound or turned off.
+            if event.matches(QKeySequence.Undo) or event.matches(QKeySequence.Redo):
+                return True
+        if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier \
+                and settings.enabled("zoom_wheel"):
             if event.angleDelta().y():
                 self.zoom(1 if event.angleDelta().y() > 0 else -1)
             return True
@@ -479,13 +482,13 @@ class NoteWindow(QWidget):
             self.eat_context_menu = False  # the press was the start of a resize
             return True
         if kind == QEvent.MouseButtonPress and event.modifiers() & Qt.AltModifier:
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.LeftButton and settings.enabled("move"):
                 handle = self.windowHandle()
                 # The window manager moves the window, snapping to the edges included.
                 if handle is None or not handle.startSystemMove():
                     self.resize_origin = (event.globalPosition(), self.geometry(), Qt.Edge(0))
                 return True
-            if event.button() == Qt.RightButton:
+            if event.button() == Qt.RightButton and settings.enabled("resize"):
                 local = self.mapFromGlobal(event.globalPosition().toPoint())
                 edges = (Qt.LeftEdge if local.x() < self.width() / 2 else Qt.RightEdge) \
                     | (Qt.TopEdge if local.y() < self.height() / 2 else Qt.BottomEdge)

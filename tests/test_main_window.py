@@ -201,12 +201,12 @@ def test_an_open_note_is_searched_as_it_is_on_screen(main_window, store):
     assert listed(main_window) == ["Note"]
 
 
-def test_enter_in_the_search_opens_the_first_match(main_window, store):
+def test_enter_in_the_search_opens_the_first_match(qtbot, main_window, store):
     add_note(main_window, store, "a", "One", "")
     add_note(main_window, store, "b", "Two", "")
     main_window.search.setText("two")
 
-    main_window.search.returnPressed.emit()
+    qtbot.keyClick(main_window.search, Qt.Key_Return)
 
     assert list(main_window.windows) == ["b"]
 
