@@ -67,3 +67,19 @@ The application, its menu entry and its command are removed. The notes are kept.
 
 Notes are JSON files in `~/.local/share/pense-bete/` (a git repository). Set
 `PENSE_BETE_DIR` to store them elsewhere.
+
+## Development
+
+Run from a git clone, the application is **Pense-bête (dev)**, kept apart from
+the installed one: its notes are in `~/.local/share/pense-bete-dev/`, its icon
+carries a DEV badge, and it has its own entry in the application menu once
+registered with:
+
+```sh
+./install.sh --dev
+```
+
+The entry runs the code of the clone directly, so changes are picked up at the
+next launch; `./pense-bete` from the clone does the same. `pense-bete-dev` is
+also available as a command. To remove the entry: `./install.sh --uninstall --dev`
+(the clone itself is kept).

@@ -3,13 +3,31 @@
 #
 # Usage: ./install.sh [install-dir]   install (asks for the directory if not given)
 #        ./install.sh --uninstall     remove the application (notes are kept)
+#        ./install.sh --dev           register this clone as "Pense-bête (dev)"
 #        --yes                        ask nothing, take the default answers
 #
 # Also runs on its own, without a clone of the repository:
 #   curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash
 set -euo pipefail
 
-APP_ID="pense-bete"
+ACTION=install
+TARGET=""
+ASSUME_YES=""
+DEV=""
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall) ACTION=uninstall ;;
+        --dev) DEV=1 ;;
+        -y|--yes) ASSUME_YES=1 ;;
+        -h|--help) ACTION=help ;;
+        *) TARGET="$arg" ;;
+    esac
+done
+
+# The development version runs from a clone and has its own menu entry, command and
+# notes (~/.local/share/pense-bete-dev), apart from the installed application.
+APP_ID="pense-bete${DEV:+-dev}"
+APP_NAME="Pense-bête${DEV:+ (dev)}"
 REPO_URL="${PENSE_BETE_REPO:-https://github.com/WatoLua/pense-bete.git}"
 # Empty when the script is piped into bash: the sources are then cloned from REPO_URL.
 SOURCE_DIR=""
@@ -70,7 +88,7 @@ uninstall() {
     rm -f -- "$DESKTOP_FILE"
     [[ -L "$BIN_LINK" ]] && rm -f -- "$BIN_LINK"
     command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" || true
-    info "$(t "Pense-bête is uninstalled. Notes are kept in ~/.local/share/pense-bete." "Pense-bête est désinstallé. Les post-its sont conservés dans ~/.local/share/pense-bete.")"
+    info "$(t "$APP_NAME is uninstalled. Notes are kept in ~/.local/share/$APP_ID." "$APP_NAME est désinstallé. Les post-its sont conservés dans ~/.local/share/$APP_ID.")"
 }
 
 check_dependencies() {
@@ -100,6 +118,11 @@ check_dependencies() {
 
 install() {
     local target="${1:-}"
+    if [[ -n "$DEV" ]]; then
+        [[ -n "$SOURCE_DIR" && -e "$SOURCE_DIR/.git" ]] \
+            || fail "$(t "--dev runs from a git clone of the repository." "--dev s'utilise depuis un clone git du dépôt.")"
+        target="$SOURCE_DIR"
+    fi
     check_dependencies
     if [[ -z "$target" ]]; then
         target="$(ask "$(t "Installation directory [$DEFAULT_DIR]: " "Dossier d'installation [$DEFAULT_DIR] : ")")"
@@ -129,11 +152,11 @@ install() {
     cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Pense-bête
+Name=$APP_NAME
 Comment=Sticky notes versioned with git
 Comment[fr]=Post-its versionnés avec git
 Exec=$target/pense-bete
-Icon=$target/icon.svg
+Icon=$target/icon${DEV:+-dev}.svg
 Terminal=false
 Categories=Utility;
 StartupWMClass=$APP_ID
@@ -146,25 +169,14 @@ EOF
         ln -sfn -- "$target/pense-bete" "$BIN_LINK"
     fi
 
-    info "$(t "Pense-bête is installed in $target" "Pense-bête est installé dans $target")"
-    echo "$(t "    Launch it from the applications menu (search for \"Pense-bête\")" "    Lancez-le depuis le menu des applications (cherchez « Pense-bête »)")"
+    info "$(t "$APP_NAME is installed in $target" "$APP_NAME est installé dans $target")"
+    echo "$(t "    Launch it from the applications menu (search for \"$APP_NAME\")" "    Lancez-le depuis le menu des applications (cherchez « $APP_NAME »)")"
     echo "$(t "    or with the command: $APP_ID" "    ou avec la commande : $APP_ID")"
-    echo "$(t "    To uninstall: $target/install.sh --uninstall" "    Désinstallation : $target/install.sh --uninstall")"
+    echo "$(t "    To uninstall: $target/install.sh --uninstall${DEV:+ --dev}" "    Désinstallation : $target/install.sh --uninstall${DEV:+ --dev}")"
 }
 
-ACTION=install
-TARGET=""
-ASSUME_YES=""
-for arg in "$@"; do
-    case "$arg" in
-        --uninstall) ACTION=uninstall ;;
-        -y|--yes) ASSUME_YES=1 ;;
-        -h|--help) ACTION=help ;;
-        *) TARGET="$arg" ;;
-    esac
-done
 case "$ACTION" in
     uninstall) uninstall ;;
-    help) sed -n '2,6p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    help) sed -n '2,7p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
     install) install "$TARGET" ;;
 esac

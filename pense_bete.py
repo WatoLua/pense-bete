@@ -33,12 +33,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+APP_DIR = Path(__file__).resolve().parent
+# Run from a git clone, the application is the development version: it keeps its own
+# notes, menu entry and window class, apart from the installed application.
+DEV_MODE = (APP_DIR / ".git").exists()
+APP_ID = "pense-bete-dev" if DEV_MODE else "pense-bete"
+APP_NAME = "Pense-bête (dev)" if DEV_MODE else "Pense-bête"
 DATA_DIR = Path(
     os.environ.get("PENSE_BETE_DIR")
-    or Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "pense-bete"
+    or Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID
 )
-APP_DIR = Path(__file__).resolve().parent
-ICON_PATH = APP_DIR / "icon.svg"
+ICON_PATH = APP_DIR / ("icon-dev.svg" if DEV_MODE else "icon.svg")
 # Written by install.sh: the installed commit of the repository.
 VERSION_FILE = APP_DIR / ".version"
 REPO_URL = os.environ.get("PENSE_BETE_REPO", "https://github.com/WatoLua/pense-bete.git")
@@ -84,26 +89,26 @@ TRANSLATIONS = {
     "update": {"en": "Update", "fr": "Mettre à jour"},
     "uninstall": {"en": "Uninstall", "fr": "Désinstaller"},
     "update_from_clone": {
-        "en": "Pense-bête runs from a git repository ({path}).\nUpdate it with git pull.",
-        "fr": "Pense-bête tourne depuis un dépôt git ({path}).\nMettez-le à jour avec git pull."},
-    "up_to_date": {"en": "Pense-bête is up to date.", "fr": "Pense-bête est à jour."},
+        "en": "{app} runs from a git repository ({path}).\nUpdate it with git pull.",
+        "fr": "{app} tourne depuis un dépôt git ({path}).\nMettez-le à jour avec git pull."},
+    "up_to_date": {"en": "{app} is up to date.", "fr": "{app} est à jour."},
     "update_available": {"en": "A new version is available. Update now?",
                          "fr": "Une nouvelle version est disponible. Mettre à jour maintenant ?"},
     "update_failed": {"en": "The update failed:\n{error}", "fr": "La mise à jour a échoué :\n{error}"},
-    "update_done": {"en": "Pense-bête is updated. Restart it now?",
-                    "fr": "Pense-bête est mis à jour. Le redémarrer maintenant ?"},
+    "update_done": {"en": "{app} is updated. Restart it now?",
+                    "fr": "{app} est mis à jour. Le redémarrer maintenant ?"},
     "confirm_uninstall": {
-        "en": "Uninstall Pense-bête?\nYour notes are kept in {path}.",
-        "fr": "Désinstaller Pense-bête ?\nVos post-its sont conservés dans {path}."},
+        "en": "Uninstall {app}?\nYour notes are kept in {path}.",
+        "fr": "Désinstaller {app} ?\nVos post-its sont conservés dans {path}."},
     "uninstall_failed": {"en": "The uninstallation failed:\n{error}",
                          "fr": "La désinstallation a échoué :\n{error}"},
-    "uninstalled": {"en": "Pense-bête is uninstalled. Your notes are kept in {path}.",
-                    "fr": "Pense-bête est désinstallé. Vos post-its sont conservés dans {path}."},
+    "uninstalled": {"en": "{app} is uninstalled. Your notes are kept in {path}.",
+                    "fr": "{app} est désinstallé. Vos post-its sont conservés dans {path}."},
 }
 
 
 def tr(key: str, **values) -> str:
-    return TRANSLATIONS[key][LANGUAGE].format(**values)
+    return TRANSLATIONS[key][LANGUAGE].format(app=APP_NAME, **values)
 
 
 def text_color_for(background: str) -> str:
@@ -289,7 +294,7 @@ class NoteWindow(QWidget):
         )
 
     def _update_window_title(self) -> None:
-        self.setWindowTitle(f"{self.note.display_title} — Pense-bête")
+        self.setWindowTitle(f"{self.note.display_title} — {APP_NAME}")
 
     def _mark_dirty(self) -> None:
         self.dirty = True
@@ -303,7 +308,7 @@ class NoteWindow(QWidget):
         try:
             self.store.save(self.note, f'Update "{self.note.display_title}"')
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", tr("save_failed", error=error))
+            QMessageBox.warning(self, APP_NAME, tr("save_failed", error=error))
             return
         self.dirty = False
 
@@ -352,7 +357,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.list)
         layout.addLayout(buttons)
 
-        self.setWindowTitle("Pense-bête")
+        self.setWindowTitle(APP_NAME)
         self.resize(300, 420)
         self.refresh_list()
 
@@ -376,7 +381,7 @@ class MainWindow(QWidget):
         try:
             self.store.save(note, "Create note")
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", tr("create_failed", error=error))
+            QMessageBox.warning(self, APP_NAME, tr("create_failed", error=error))
             return
         self.notes.append(note)
         self.refresh_list()
@@ -415,7 +420,7 @@ class MainWindow(QWidget):
         try:
             self.store.delete(note)
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", tr("delete_failed", error=error))
+            QMessageBox.warning(self, APP_NAME, tr("delete_failed", error=error))
         self.notes.remove(note)
         self.refresh_list()
 
@@ -426,7 +431,7 @@ class MainWindow(QWidget):
     def update_app(self) -> None:
         # A clone is the user's own checkout: overwriting its files would clobber their work.
         if (APP_DIR / ".git").exists():
-            QMessageBox.information(self, "Pense-bête", tr("update_from_clone", path=APP_DIR))
+            QMessageBox.information(self, APP_NAME, tr("update_from_clone", path=APP_DIR))
             return
         try:
             remote = run_command("git", "ls-remote", REPO_URL, "HEAD")
@@ -435,7 +440,7 @@ class MainWindow(QWidget):
             latest = remote.stdout.split()[0] if remote.stdout.split() else ""
             installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
             if latest and latest == installed:
-                QMessageBox.information(self, "Pense-bête", tr("up_to_date"))
+                QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
             if QMessageBox.question(self, tr("update"), tr("update_available")) != QMessageBox.Yes:
                 return
@@ -449,7 +454,7 @@ class MainWindow(QWidget):
             if result.returncode:
                 raise RuntimeError(command_error(result))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-            QMessageBox.warning(self, "Pense-bête", tr("update_failed", error=error))
+            QMessageBox.warning(self, APP_NAME, tr("update_failed", error=error))
             return
         if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
             self.close()
@@ -462,13 +467,14 @@ class MainWindow(QWidget):
             return
         self.save_all()
         try:
-            result = run_command("bash", str(APP_DIR / "install.sh"), "--uninstall", "--yes")
+            result = run_command("bash", str(APP_DIR / "install.sh"), "--uninstall", "--yes",
+                                 *(["--dev"] if DEV_MODE else []))
             if result.returncode:
                 raise RuntimeError(command_error(result))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-            QMessageBox.warning(self, "Pense-bête", tr("uninstall_failed", error=error))
+            QMessageBox.warning(self, APP_NAME, tr("uninstall_failed", error=error))
             return
-        QMessageBox.information(self, "Pense-bête", tr("uninstalled", path=DATA_DIR))
+        QMessageBox.information(self, APP_NAME, tr("uninstalled", path=DATA_DIR))
         self.close()
 
     def closeEvent(self, event) -> None:
@@ -481,9 +487,10 @@ class MainWindow(QWidget):
 
 def main() -> None:
     app = QApplication(sys.argv)
-    app.setApplicationName("Pense-bête")
-    # Matches pense-bete.desktop, so the desktop shell groups the windows under its entry.
-    app.setDesktopFileName("pense-bete")
+    app.setApplicationName(APP_NAME)
+    # Matches the desktop entry install.sh writes, so the desktop shell groups the
+    # windows under that entry.
+    app.setDesktopFileName(APP_ID)
     app.setWindowIcon(QIcon(str(ICON_PATH)))
     # Qt's own strings (dialog buttons, color picker) follow the same language.
     qt_translator = QTranslator(app)
