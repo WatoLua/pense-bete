@@ -2,7 +2,8 @@
 # Installs Pense-bête for the current user and registers it in the GNOME menu.
 #
 # Usage: ./install.sh [install-dir]   install (asks for the directory if not given)
-#        ./install.sh --uninstall     remove the application (notes are kept)
+#        ./install.sh --uninstall     remove the application, and on request its data
+#        --purge                      with --uninstall: delete the notes and settings too
 #        ./install.sh --dev           register this clone as "Pense-bête (dev)"
 #        --yes                        ask nothing, take the default answers
 #
@@ -13,10 +14,12 @@ set -euo pipefail
 ACTION=install
 TARGET=""
 ASSUME_YES=""
+PURGE=""
 DEV=""
 for arg in "$@"; do
     case "$arg" in
         --uninstall) ACTION=uninstall ;;
+        --purge) PURGE=1 ;;
         --dev) DEV=1 ;;
         -y|--yes) ASSUME_YES=1 ;;
         -h|--help) ACTION=help ;;
@@ -38,6 +41,9 @@ fi
 DEFAULT_DIR="$HOME/.local/opt/$APP_ID"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID.desktop"
 BIN_LINK="$HOME/.local/bin/$APP_ID"
+# Where the application keeps its data, as pense_bete.py computes it.
+DATA_DIR="${PENSE_BETE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
 FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh)
 
 # Messages are in French when the system locale is French, in English otherwise.
@@ -69,8 +75,31 @@ ask_yes() {  # ask_yes "question" -> true on yes, default yes
     [[ -z "$answer" || "$answer" =~ ^[yYoO] ]]
 }
 
+ask_no() {  # ask_no "question" -> true on yes, default no
+    local answer
+    answer="$(ask "$1 $(t "[y/N]" "[o/N]") ")"
+    [[ "$answer" =~ ^[yYoO] ]]
+}
+
+delete_data() {
+    local note_dir
+    # Only what the application wrote: note directories, then the data directory if that
+    # leaves it empty, so that a PENSE_BETE_DIR pointing elsewhere loses nothing else.
+    for note_dir in "$DATA_DIR"/*/; do
+        [[ -f "$note_dir/note.json" ]] && rm -rf -- "$note_dir"
+    done
+    rmdir -- "$DATA_DIR" 2>/dev/null || true
+    rm -f -- "$CONFIG_DIR/session.json" "$CONFIG_DIR/session.tmp"
+    rmdir -- "$CONFIG_DIR" 2>/dev/null || true
+}
+
 uninstall() {
-    local exec_line install_dir=""
+    local exec_line install_dir="" purge="$PURGE"
+    # Asked first, so the answer does not depend on what the removal prints. Default no:
+    # the notes cannot be recovered once deleted.
+    if [[ -z "$purge" && -d "$DATA_DIR" ]] && ask_no "$(t "Also delete the notes and settings ($DATA_DIR)? They cannot be recovered." "Supprimer aussi les post-its et les réglages ($DATA_DIR) ? Ils ne pourront pas être récupérés.")"; then
+        purge=1
+    fi
     # The desktop entry records where the application was installed.
     if [[ -f "$DESKTOP_FILE" ]]; then
         exec_line="$(grep -m1 '^Exec=' "$DESKTOP_FILE" || true)"
@@ -88,7 +117,12 @@ uninstall() {
     rm -f -- "$DESKTOP_FILE"
     [[ -L "$BIN_LINK" ]] && rm -f -- "$BIN_LINK"
     command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" || true
-    info "$(t "$APP_NAME is uninstalled. Notes are kept in ~/.local/share/$APP_ID." "$APP_NAME est désinstallé. Les post-its sont conservés dans ~/.local/share/$APP_ID.")"
+    if [[ -n "$purge" ]]; then
+        delete_data
+        info "$(t "$APP_NAME is uninstalled, with its notes and settings." "$APP_NAME est désinstallé, avec ses post-its et ses réglages.")"
+    else
+        info "$(t "$APP_NAME is uninstalled. Notes are kept in $DATA_DIR." "$APP_NAME est désinstallé. Les post-its sont conservés dans $DATA_DIR.")"
+    fi
 }
 
 check_dependencies() {
@@ -183,6 +217,6 @@ EOF
 
 case "$ACTION" in
     uninstall) uninstall ;;
-    help) sed -n '2,7p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    help) sed -n '2,8p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
     install) install "$TARGET" ;;
 esac

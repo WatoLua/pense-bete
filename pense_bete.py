@@ -24,6 +24,7 @@ from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap, QShortc
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -148,13 +149,16 @@ TRANSLATIONS = {
     "update_failed": {"en": "The update failed:\n{error}", "fr": "La mise à jour a échoué :\n{error}"},
     "update_done": {"en": "{app} is updated. Restart it now?",
                     "fr": "{app} est mis à jour. Le redémarrer maintenant ?"},
-    "confirm_uninstall": {
-        "en": "Uninstall {app}?\nYour notes are kept in {path}.",
-        "fr": "Désinstaller {app} ?\nVos post-its sont conservés dans {path}."},
+    "confirm_uninstall": {"en": "Uninstall {app}?", "fr": "Désinstaller {app} ?"},
+    "uninstall_purge": {
+        "en": "Also delete the notes and settings (cannot be undone)",
+        "fr": "Supprimer aussi les post-its et les réglages (irréversible)"},
     "uninstall_failed": {"en": "The uninstallation failed:\n{error}",
                          "fr": "La désinstallation a échoué :\n{error}"},
     "uninstalled": {"en": "{app} is uninstalled. Your notes are kept in {path}.",
                     "fr": "{app} est désinstallé. Vos post-its sont conservés dans {path}."},
+    "uninstalled_purged": {"en": "{app} is uninstalled, with its notes and settings.",
+                           "fr": "{app} est désinstallé, avec ses post-its et ses réglages."},
 }
 
 
@@ -1062,21 +1066,36 @@ class MainWindow(QWidget):
             QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
 
     def uninstall_app(self) -> None:
-        if QMessageBox.question(
-            self, tr("uninstall"), tr("confirm_uninstall", path=DATA_DIR)
-        ) != QMessageBox.Yes:
+        box = QMessageBox(QMessageBox.Question, tr("uninstall"), tr("confirm_uninstall"),
+                          QMessageBox.Yes | QMessageBox.No, self)
+        box.setDefaultButton(QMessageBox.No)
+        purge = QCheckBox(tr("uninstall_purge"))
+        box.setCheckBox(purge)
+        if box.exec() != QMessageBox.Yes:
             return
+        purging = purge.isChecked()
         self.save_all()
         try:
             result = run_command("bash", str(APP_DIR / "install.sh"), "--uninstall", "--yes",
+                                 *(["--purge"] if purging else []),
                                  *(["--dev"] if DEV_MODE else []))
             if result.returncode:
                 raise RuntimeError(command_error(result))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             QMessageBox.warning(self, APP_NAME, tr("uninstall_failed", error=error))
             return
-        QMessageBox.information(self, APP_NAME, tr("uninstalled", path=DATA_DIR))
-        self.quit_app()
+        if not purging:
+            QMessageBox.information(self, APP_NAME, tr("uninstalled", path=DATA_DIR))
+            self.quit_app()
+            return
+        QMessageBox.information(self, APP_NAME, tr("uninstalled_purged"))
+        # Quitting as usual would write the session and the open notes back to disk.
+        self.quitting = True
+        for window in list(self.windows.values()):
+            window.discard()
+        self.tray.hide()
+        self.close()
+        QApplication.quit()
 
     def quit_app(self) -> None:
         """Record the session, then close every window, saving the notes, and quit."""

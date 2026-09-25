@@ -109,8 +109,11 @@ In the **⋮** menu, choose **Uninstall**, or run:
 ~/.local/opt/pense-bete/install.sh --uninstall
 ```
 
-The application, its menu entry and its command are removed. The notes and the
-window state are kept.
+The application, its menu entry and its command are removed. It then asks
+whether to delete the notes and settings as well — the default keeps them; in
+the application, that is the checkbox of the confirmation. `--purge` deletes
+them without asking. Only note directories are deleted, so a `PENSE_BETE_DIR`
+pointing at a folder with other files loses nothing else.
 
 ## Data
 
