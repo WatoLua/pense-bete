@@ -53,6 +53,14 @@ erased at once. The delay before erasing is set there, 30 days by default;
 expired notes are erased at launch and when that list opens. Erasing a note
 removes its repository, and so its history.
 
+### Backup
+
+**Export the notes…**, in the **⋮** menu, writes every note, deleted ones
+included, with its whole history into a `.zip` archive. **Import notes…** adds
+the notes of such an archive, on this machine or another: a note already there
+and unchanged is skipped, one that differs is added beside the existing one, so
+an import never overwrites anything.
+
 ### Windows and background
 
 - The open windows — the list and the notes — come back at the next launch,

@@ -3,6 +3,8 @@
 import subprocess
 import sys
 import threading
+from datetime import datetime
+from pathlib import Path
 import unicodedata
 import uuid
 
@@ -12,6 +14,7 @@ from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFileDialog,
     QHBoxLayout,
     QLineEdit,
     QListWidget,
@@ -25,8 +28,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .archive import ArchiveError, export_notes, import_notes
 from .config import (
-    APP_DIR, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH,
+    APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH,
     RECENT_NOTES,
 )
 from .i18n import tr
@@ -102,6 +106,8 @@ class MainWindow(QWidget):
             sort_group.addAction(action)
         options_menu.addSeparator()
         options_menu.addAction(tr("deleted_notes"), self.open_trash)
+        options_menu.addAction(tr("export"), self.export_archive)
+        options_menu.addAction(tr("import"), self.import_archive)
         options_menu.addSeparator()
         options_menu.addAction(tr("update"), self.update_app)
         self.auto_update_action = options_menu.addAction(tr("auto_update"))
@@ -375,6 +381,34 @@ class MainWindow(QWidget):
     def open_trash(self) -> None:
         self.erase_expired()
         TrashDialog(self).exec()
+
+    def export_archive(self) -> None:
+        default = Path.home() / f"{APP_ID}-{datetime.now():%Y-%m-%d}.zip"
+        path, _ = QFileDialog.getSaveFileName(self, tr("export_title"), str(default),
+                                              tr("archive_filter"))
+        if not path:
+            return
+        self.save_all()  # the archive holds what is on screen
+        try:
+            count = export_notes(self.store, Path(path))
+        except OSError as error:
+            QMessageBox.warning(self, APP_NAME, tr("export_failed", error=error))
+            return
+        QMessageBox.information(self, APP_NAME, tr("exported", count=count, path=path))
+
+    def import_archive(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, tr("import_title"), str(Path.home()),
+                                              tr("archive_filter"))
+        if not path:
+            return
+        try:
+            added, skipped = import_notes(self.store, Path(path))
+        except (OSError, ArchiveError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("import_failed", error=error))
+            return
+        self.notes.extend(added)
+        self.refresh_list()
+        QMessageBox.information(self, APP_NAME, tr("imported", count=len(added), skipped=skipped))
 
     def save_all(self) -> None:
         for window in self.windows.values():

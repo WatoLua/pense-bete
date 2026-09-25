@@ -258,3 +258,28 @@ def test_an_edit_moves_the_note_up_when_sorted_by_last_edit(main_window, store):
     main_window.windows["a"].save()
 
     assert listed(main_window)[0] == "Old"
+
+
+def test_export_then_import_from_the_menu(main_window, store, tmp_path, monkeypatch, qtbot):
+    from PySide6.QtWidgets import QFileDialog
+    from pensebete.archive import export_notes
+    archive = tmp_path / "out.zip"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(archive), "")))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(archive), "")))
+    main_window.create_note()
+    note_window = next(iter(main_window.windows.values()))
+    note_window.content_edit.setPlainText("unsaved, exported anyway")
+
+    main_window.export_archive()
+
+    other_store = NoteStore(tmp_path / "other")
+    from pensebete.archive import import_notes
+    [note], _ = import_notes(other_store, archive)
+    assert note.content == "unsaved, exported anyway"
+
+    other_store.save(Note("new-one", "From elsewhere"), "Create")
+    export_notes(other_store, archive)
+    main_window.import_archive()
+    assert "From elsewhere" in listed(main_window)
