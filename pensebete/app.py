@@ -62,6 +62,10 @@ def main() -> None:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     app = QApplication(sys.argv)
+    # The same style on every system, and one that draws with the palette it is given:
+    # a note's window takes its colors from its paper, which the Windows 11 style
+    # partly ignores, leaving white text of a dark theme on a yellow note.
+    app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     # Matches the desktop entry install.sh writes, so the desktop shell groups the
     # windows under that entry.

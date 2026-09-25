@@ -33,10 +33,11 @@ from .diff import differences, utf16_ranges
 from .i18n import tr
 from .markdown import MarkdownEditing, MarkdownHighlighter
 from .storage import Note, NoteStore, Version
-from .style import color_icon, pin_icon, text_color_for
+from .style import color_icon, note_palette, pin_icon, pixel_font, text_color_for
 
 
 TASKS_TEMPLATE = "- [ ] "
+TITLE_FONT_SIZE = 14
 
 # Translucent, so that they read on any note color.
 REMOVED_COLOR = QColor(229, 57, 53, 90)
@@ -103,10 +104,13 @@ class HistoryPanel(QFrame):
         self.position = QLabel()
 
         self.title = QLabel()
-        self.title.setObjectName("historyTitle")
         self.title.setWordWrap(True)
+        self.title.setAutoFillBackground(True)
+        self.title.setMargin(2)
+        self.title.setFont(pixel_font(self.title.font(), TITLE_FONT_SIZE, bold=True))
         self.content = QPlainTextEdit()
         self.content.setReadOnly(True)
+        self.content.setFrameShape(QFrame.NoFrame)
         self.markdown = False
         self.highlighter = MarkdownHighlighter(self.content.document(), self.font_size,
                                                "#000000")
@@ -183,11 +187,10 @@ class HistoryPanel(QFrame):
         self.content.setPlainText(version.content)
         foreground = text_color_for(version.color)
         self.highlighter.configure(self.markdown, self.font_size, foreground)
-        self.setStyleSheet(
-            f"QPlainTextEdit, QLabel#historyTitle {{ background: {version.color};"
-            f" color: {foreground}; border: none; font-size: {self.font_size}px; }}"
-            " QLabel#historyTitle { font-weight: bold; font-size: 14px; padding: 2px; }"
-        )
+        # The version on its own paper; the panel's buttons stay on the note's.
+        for widget in (self.title, self.content):
+            widget.setPalette(note_palette(version.color))
+        self.content.setFont(pixel_font(self.content.font(), self.font_size))
         self.shown.emit()
 
 
@@ -218,6 +221,8 @@ class NoteWindow(QWidget):
         self.timer.timeout.connect(self.save)
 
         self.title_edit = QLineEdit(note.title)
+        self.title_edit.setFrame(False)
+        self.title_edit.setFont(pixel_font(self.title_edit.font(), TITLE_FONT_SIZE, bold=True))
         self.title_edit.setPlaceholderText(tr("title_placeholder"))
         self.title_edit.textChanged.connect(self._on_title_changed)
 
@@ -234,6 +239,7 @@ class NoteWindow(QWidget):
         self.color_button.setMenu(menu)
 
         self.content_edit = QPlainTextEdit(note.content)
+        self.content_edit.setFrameShape(QFrame.NoFrame)
         self.markdown = False
         self.highlighter = MarkdownHighlighter(self.content_edit.document(), DEFAULT_FONT_SIZE,
                                                text_color_for(note.color))
@@ -430,12 +436,11 @@ class NoteWindow(QWidget):
     def _apply_color(self) -> None:
         foreground = text_color_for(self.note.color)
         self.highlighter.configure(self.markdown, self.font_size, foreground)
-        self.setStyleSheet(
-            f"NoteWindow, QPlainTextEdit, QLineEdit {{ background: {self.note.color};"
-            f" color: {foreground}; }}"
-            " QLineEdit { font-weight: bold; border: none; font-size: 14px; }"
-            f" QPlainTextEdit {{ border: none; font-size: {self.font_size}px; }}"
-        )
+        # A palette rather than a style sheet: a style sheet stops a palette from reaching
+        # the widgets inside, which then keep the system theme's colors, white text of a
+        # dark theme on the note's yellow.
+        self.setPalette(note_palette(self.note.color))
+        self.content_edit.setFont(pixel_font(self.content_edit.font(), self.font_size))
 
     def eventFilter(self, watched, event) -> bool:
         if self._move_or_resize(event):

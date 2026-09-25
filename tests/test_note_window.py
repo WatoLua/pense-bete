@@ -201,7 +201,7 @@ def test_ctrl_and_the_wheel_zoom_the_text(qtbot, window):
     assert window.font_size == 14
     wheel(120, Qt.NoModifier)  # scrolls, as usual
     assert window.font_size == 14
-    assert "font-size: 14px" in window.styleSheet()
+    assert window.content_edit.font().pixelSize() == 14
     assert len(zoomed) == 3
 
 
@@ -366,3 +366,30 @@ def test_ctrl_t_selects_the_header_even_when_the_window_wraps_it(qtbot, focused)
     qtbot.keyClick(focused.content_edit, Qt.Key_T, Qt.ControlModifier)
 
     assert focused.content_edit.textCursor().selectedText() == "Column 1"
+
+
+def test_every_widget_of_a_note_reads_on_its_paper_in_a_dark_theme(qtbot, store, answer_yes):
+    """A dark system theme must not leave white text on a light note, nor dark buttons."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication, QLabel, QToolButton
+    saved = QApplication.palette()
+    dark = QPalette()
+    for role in (QPalette.WindowText, QPalette.ButtonText, QPalette.Text):
+        dark.setColor(role, QColor("#ffffff"))
+    dark.setColor(QPalette.Button, QColor("#303030"))
+    QApplication.setPalette(dark)
+    try:
+        note = Note("a", content="text")
+        store.save(note, "Create")
+        window = NoteWindow(note, store)
+        qtbot.addWidget(window)
+        store.save(Note("a", content="text v2"), "Update")
+        window.history_button.setChecked(True)
+
+        for widget in window.findChildren(QLabel) + window.findChildren(QToolButton):
+            palette = widget.palette()
+            assert palette.color(QPalette.WindowText).name() == "#000000", widget
+            assert palette.color(QPalette.ButtonText).name() == "#000000", widget
+            assert palette.color(QPalette.Button).lightness() > 128, widget
+    finally:
+        QApplication.setPalette(saved)

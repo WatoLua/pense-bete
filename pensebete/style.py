@@ -1,7 +1,7 @@
 """Colors and icons drawn by the application."""
 
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPixmap
 
 
 def text_color_for(background: str) -> str:
@@ -9,6 +9,33 @@ def text_color_for(background: str) -> str:
     color = QColor(background)
     luminance = 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()
     return "#000000" if luminance > 140 else "#ffffff"
+
+
+def note_palette(background: str) -> QPalette:
+    """The colors of a note's window, drawn from its paper: every widget in it, buttons
+    and labels included, reads on the paper whatever the system's theme, dark or light."""
+    paper = QColor(background)
+    ink = QColor(text_color_for(background))
+    # Buttons a shade off the paper, so that they show as buttons on it.
+    button = paper.darker(108) if ink.lightness() < 128 else paper.lighter(125)
+    palette = QPalette(button, paper)
+    palette.setColor(QPalette.Base, paper)
+    faded = QColor(ink)
+    faded.setAlpha(110)
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        palette.setColor(QPalette.Active, role, ink)
+        palette.setColor(QPalette.Inactive, role, ink)
+        palette.setColor(QPalette.Disabled, role, faded)
+    palette.setColor(QPalette.PlaceholderText, faded)
+    return palette
+
+
+def pixel_font(font: QFont, size: int, bold: bool = False) -> QFont:
+    """A copy of the font at a size in pixels, as the notes' text sizes are counted."""
+    font = QFont(font)
+    font.setPixelSize(size)
+    font.setBold(bold)
+    return font
 
 
 def pin_icon() -> QIcon:
