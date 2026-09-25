@@ -5,16 +5,16 @@ opens in its own window, with a title, a color and free text.
 
 - Notes are saved automatically 10 seconds after the last change, and
   immediately when their window is closed.
-- Every save is committed to a local git repository, so the whole history of
-  each note is kept: `git -C ~/.local/share/pense-bete log`.
+- Every save is committed to the note's own local git repository, so the whole
+  history of each note is kept, apart from the others.
 - **History** in a note splits its window: previous versions on the left,
   picked from a dated list or browsed with the arrows (Alt+← / Alt+→). A
   version can replace the current note, which stays in the history, or be
   copied into a new note.
 - Deleted notes can be restored from **Deleted notes…** in the **⋮** menu,
   with their history. They are erased after a delay chosen there (30 days by
-  default), checked at launch and when that list opens. Erased notes remain in
-  the git history of the notes repository.
+  default), checked at launch and when that list opens. Erasing a note removes
+  its repository, and so its history.
 - The open windows are restored at the next launch.
 - With **Keep running in the background when closed** (in the **⋮** menu),
   closing the list leaves the notes open and the application running, with an
@@ -78,8 +78,9 @@ The application, its menu entry and its command are removed. The notes are kept.
 
 ## Data
 
-Notes are JSON files in `~/.local/share/pense-bete/` (a git repository). Set
-`PENSE_BETE_DIR` to store them elsewhere.
+Each note is a directory in `~/.local/share/pense-bete/`, holding the note as
+`note.json` and its git repository: `git -C ~/.local/share/pense-bete/<id> log`
+shows its history. Set `PENSE_BETE_DIR` to store the notes elsewhere.
 
 ## Development
 

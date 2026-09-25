@@ -8,6 +8,7 @@ modification, and immediately when its window is closed.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,8 @@ SESSION_FILE = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_ID / "session.json"
 )
 RECENT_NOTES = 3
+# Each note lives in its own directory and git repository: <DATA_DIR>/<note id>/note.json.
+NOTE_FILE = "note.json"
 DEFAULT_RETENTION_DAYS = 30
 ICON_PATH = APP_DIR / ("icon-dev.svg" if DEV_MODE else "icon.svg")
 # Written by install.sh: the installed commit of the repository.
@@ -186,17 +189,17 @@ def color_icon(color: str) -> QIcon:
 
 
 class GitRepo:
-    """Thin wrapper around the git CLI for the notes directory."""
+    """Thin wrapper around the git CLI for one repository."""
 
     def __init__(self, path: Path):
         self.path = path
-        path.mkdir(parents=True, exist_ok=True)
         if not (path / ".git").exists():
+            path.mkdir(parents=True, exist_ok=True)
             self._run("init", "--quiet")
-        # Commits must never fail for lack of an identity on this machine.
-        if not self._run("config", "user.email", check=False).stdout.strip():
-            self._run("config", "user.name", "Pense-bête")
-            self._run("config", "user.email", "pense-bete@localhost")
+            # Commits must never fail for lack of an identity on this machine.
+            if not self._run("config", "user.email", check=False).stdout.strip():
+                self._run("config", "user.name", "Pense-bête")
+                self._run("config", "user.email", "pense-bete@localhost")
 
     def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -204,7 +207,7 @@ class GitRepo:
         )
 
     def commit_file(self, filename: str, message: str) -> None:
-        """Stage one file (added, modified or removed) and commit it if it changed."""
+        """Stage one file and commit it if it changed."""
         self._run("add", "--all", "--", filename)
         if self._run("diff", "--cached", "--quiet", "--", filename, check=False).returncode:
             self._run("commit", "--quiet", "-m", message, "--", filename)
@@ -265,10 +268,6 @@ class Note:
         return (datetime.now() - datetime.fromisoformat(self.deleted)).days if self.deleted else 0
 
     @property
-    def filename(self) -> str:
-        return f"{self.id}.json"
-
-    @property
     def display_title(self) -> str:
         return self.title.strip() or tr("untitled")
 
@@ -286,31 +285,41 @@ class Note:
 
 
 class NoteStore:
+    """The notes, one directory and git repository each, so every note has its own history."""
+
     def __init__(self, path: Path):
         self.path = path
-        self.git = GitRepo(path)
+        self.repos: dict[str, GitRepo] = {}
+        path.mkdir(parents=True, exist_ok=True)
+
+    def _repo(self, note: Note) -> GitRepo:
+        repo = self.repos.get(note.id)
+        if repo is None:
+            repo = self.repos[note.id] = GitRepo(self.path / note.id)
+        return repo
 
     def load_all(self) -> list[Note]:
         notes = []
-        for file in self.path.glob("*.json"):
+        for file in self.path.glob(f"*/{NOTE_FILE}"):
             try:
                 notes.append(Note.from_dict(json.loads(file.read_text(encoding="utf-8"))))
             except (OSError, ValueError, KeyError) as error:
-                print(f"Ignoring unreadable note {file.name}: {error}", file=sys.stderr)
+                print(f"Ignoring unreadable note {file.parent.name}: {error}", file=sys.stderr)
         return sorted(notes, key=lambda note: note.created)
 
     def save(self, note: Note, message: str) -> None:
-        target = self.path / note.filename
+        repo = self._repo(note)
+        target = repo.path / NOTE_FILE
         # Written to a temporary file then renamed, so a crash never leaves a truncated note.
         temporary = target.with_suffix(".tmp")
         temporary.write_text(json.dumps(note.to_dict(), ensure_ascii=False, indent=2) + "\n",
                              encoding="utf-8")
         temporary.replace(target)
-        self.git.commit_file(note.filename, message)
+        repo.commit_file(NOTE_FILE, message)
 
     def history(self, note: Note) -> list[Version]:
         versions = []
-        for commit, timestamp, text in self.git.file_versions(note.filename):
+        for commit, timestamp, text in self._repo(note).file_versions(NOTE_FILE):
             try:
                 data = json.loads(text)
             except ValueError:
@@ -337,9 +346,9 @@ class NoteStore:
             raise
 
     def erase(self, note: Note) -> None:
-        """Remove the note from the application; its past versions stay in the git history."""
-        (self.path / note.filename).unlink(missing_ok=True)
-        self.git.commit_file(note.filename, f'Erase "{note.display_title}"')
+        """Remove the note for good, with its repository and so its whole history."""
+        self.repos.pop(note.id, None)
+        shutil.rmtree(self.path / note.id)
 
 
 class Session:
