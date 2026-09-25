@@ -7,6 +7,10 @@ opens in its own window, with a title, a color and free text.
   immediately when their window is closed.
 - Every save is committed to a local git repository, so the whole history of
   each note is kept: `git -C ~/.local/share/pense-bete log`.
+- **History** in a note splits its window: previous versions on the left,
+  picked from a dated list or browsed with the arrows (Alt+← / Alt+→). A
+  version can replace the current note, which stays in the history, or be
+  copied into a new note.
 - The open windows are restored at the next launch.
 - With **Keep running in the background when closed** (in the **⋮** menu),
   closing the list leaves the notes open and the application running, with an

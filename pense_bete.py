@@ -12,18 +12,22 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QByteArray, QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal,
+    QByteArray, QDateTime, QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal,
 )
-from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
+    QComboBox,
+    QFrame,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -31,6 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
@@ -98,6 +103,20 @@ TRANSLATIONS = {
     "keep_running": {"en": "Keep running in the background when closed",
                      "fr": "Rester en arrière-plan à la fermeture"},
     "open_main": {"en": "Open {app}", "fr": "Ouvrir {app}"},
+    "history": {"en": "History", "fr": "Historique"},
+    "history_older": {"en": "Older version (Alt+Left)", "fr": "Version précédente (Alt+←)"},
+    "history_newer": {"en": "Newer version (Alt+Right)", "fr": "Version suivante (Alt+→)"},
+    "history_current": {"en": "current version", "fr": "version actuelle"},
+    "history_restore": {"en": "Restore", "fr": "Restaurer"},
+    "history_restore_tip": {"en": "Replace the current note with this version",
+                            "fr": "Remplacer le post-it actuel par cette version"},
+    "history_copy": {"en": "New note", "fr": "Nouveau post-it"},
+    "history_copy_tip": {"en": "Create a new note with this version",
+                         "fr": "Créer un nouveau post-it avec cette version"},
+    "history_close": {"en": "Close history", "fr": "Quitter l'historique"},
+    "history_empty": {"en": "No history for this note.", "fr": "Aucun historique pour ce post-it."},
+    "history_failed": {"en": "Could not read the history:\n{error}",
+                       "fr": "Impossible de lire l'historique :\n{error}"},
     "quit": {"en": "Quit", "fr": "Quitter"},
     "update": {"en": "Update", "fr": "Mettre à jour"},
     "uninstall": {"en": "Uninstall", "fr": "Désinstaller"},
@@ -174,6 +193,46 @@ class GitRepo:
         if self._run("diff", "--cached", "--quiet", "--", filename, check=False).returncode:
             self._run("commit", "--quiet", "-m", message, "--", filename)
 
+    def file_versions(self, filename: str) -> list[tuple[str, int, str]]:
+        """(commit, timestamp, content) of each commit that changed the file, newest first."""
+        log = self._run("log", "--format=%H %at", "--", filename).stdout.split()
+        commits = list(zip(log[0::2], map(int, log[1::2])))
+        if not commits:
+            return []
+        # All contents in one git process, which keeps long histories fast to open.
+        requests = "".join(f"{commit}:{filename}\n" for commit, _ in commits).encode()
+        output = subprocess.run(["git", "cat-file", "--batch"], cwd=self.path, input=requests,
+                                capture_output=True, check=True).stdout
+        versions, position = [], 0
+        for commit, timestamp in commits:
+            end = output.index(b"\n", position)
+            header = output[position:end].split()
+            position = end + 1
+            if header[-1] == b"missing":  # the commit that deleted the file
+                continue
+            size = int(header[2])
+            versions.append((commit, timestamp, output[position:position + size].decode()))
+            position += size + 1
+        return versions
+
+
+@dataclass
+class Version:
+    """A note as saved by one commit."""
+
+    commit: str
+    timestamp: int
+    title: str
+    color: str
+    content: str
+
+    @property
+    def date(self) -> str:
+        # With seconds: saves come 10 seconds apart, so a minute often holds several.
+        moment = QDateTime.fromSecsSinceEpoch(self.timestamp)
+        return (f"{QLocale().toString(moment.date(), QLocale.FormatType.ShortFormat)}"
+                f" {moment.toString('HH:mm:ss')}")
+
 
 class Note:
     def __init__(self, note_id: str, title: str = "", color: str = DEFAULT_COLOR,
@@ -225,6 +284,17 @@ class NoteStore:
         temporary.replace(target)
         self.git.commit_file(note.filename, message)
 
+    def history(self, note: Note) -> list[Version]:
+        versions = []
+        for commit, timestamp, text in self.git.file_versions(note.filename):
+            try:
+                data = json.loads(text)
+            except ValueError:
+                continue
+            versions.append(Version(commit, timestamp, data.get("title", ""),
+                                    data.get("color", DEFAULT_COLOR), data.get("content", "")))
+        return versions
+
     def delete(self, note: Note) -> None:
         (self.path / note.filename).unlink(missing_ok=True)
         self.git.commit_file(note.filename, f'Delete "{note.display_title}"')
@@ -272,11 +342,121 @@ class Session:
             print(f"Could not save the session: {error}", file=sys.stderr)
 
 
+class HistoryPanel(QFrame):
+    """Read-only view of a note's previous versions, browsed from a dated list or arrows."""
+
+    restore_requested = Signal(object)  # Version
+    copy_requested = Signal(object)  # Version
+    close_requested = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.versions: list[Version] = []
+
+        self.older_button = QToolButton()
+        self.older_button.setText("◀")
+        self.older_button.setToolTip(tr("history_older"))
+        self.older_button.clicked.connect(lambda: self.select(self.combo.currentIndex() + 1))
+        self.newer_button = QToolButton()
+        self.newer_button.setText("▶")
+        self.newer_button.setToolTip(tr("history_newer"))
+        self.newer_button.clicked.connect(lambda: self.select(self.combo.currentIndex() - 1))
+        self.combo = QComboBox()
+        # Long titles must not widen the panel at the expense of the note beside it.
+        self.combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.combo.setMinimumContentsLength(12)
+        self.combo.currentIndexChanged.connect(self._show)
+        self.position = QLabel()
+
+        self.title = QLabel()
+        self.title.setObjectName("historyTitle")
+        self.title.setWordWrap(True)
+        self.content = QPlainTextEdit()
+        self.content.setReadOnly(True)
+
+        self.restore_button = QPushButton(tr("history_restore"))
+        self.restore_button.setToolTip(tr("history_restore_tip"))
+        self.restore_button.clicked.connect(lambda: self.restore_requested.emit(self.current()))
+        self.copy_button = QPushButton(tr("history_copy"))
+        self.copy_button.setToolTip(tr("history_copy_tip"))
+        self.copy_button.clicked.connect(lambda: self.copy_requested.emit(self.current()))
+        close_button = QToolButton()
+        close_button.setText("✕")
+        close_button.setToolTip(tr("history_close"))
+        close_button.clicked.connect(self.close_requested)
+
+        navigation = QHBoxLayout()
+        navigation.addWidget(self.older_button)
+        navigation.addWidget(self.combo, 1)
+        navigation.addWidget(self.newer_button)
+        navigation.addWidget(self.position)
+        navigation.addWidget(close_button)
+        actions = QHBoxLayout()
+        actions.addWidget(self.restore_button)
+        actions.addWidget(self.copy_button)
+        actions.addStretch()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.addLayout(navigation)
+        layout.addWidget(self.title)
+        layout.addWidget(self.content, 1)
+        layout.addLayout(actions)
+
+    def set_versions(self, versions: list[Version]) -> None:
+        """Fill the list, keeping the selected version when it is still there."""
+        selected = self.current().commit if self.current() else None
+        self.versions = versions
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        for index, version in enumerate(versions):
+            title = version.title.strip() or tr("untitled")
+            label = f"{version.date} — {title}"
+            if index == 0:
+                label += f" ({tr('history_current')})"
+            self.combo.addItem(color_icon(version.color), label)
+        self.combo.blockSignals(False)
+        commits = [version.commit for version in versions]
+        # Opening on the version before the current one: that is what history is looked for.
+        self.select(commits.index(selected) if selected in commits else min(1, len(versions) - 1))
+
+    def current(self) -> Version | None:
+        index = self.combo.currentIndex()
+        return self.versions[index] if 0 <= index < len(self.versions) else None
+
+    def select(self, index: int) -> None:
+        if 0 <= index < len(self.versions):
+            self.combo.setCurrentIndex(index)
+        self._show()
+
+    def _show(self) -> None:
+        version = self.current()
+        index = self.combo.currentIndex()
+        self.older_button.setEnabled(version is not None and index < len(self.versions) - 1)
+        self.newer_button.setEnabled(version is not None and index > 0)
+        self.restore_button.setEnabled(version is not None and index > 0)
+        self.copy_button.setEnabled(version is not None)
+        if version is None:
+            self.position.clear()
+            self.title.setText(tr("history_empty"))
+            self.content.clear()
+            return
+        self.position.setText(f"{len(self.versions) - index} / {len(self.versions)}")
+        self.title.setText(version.title.strip() or tr("untitled"))
+        self.content.setPlainText(version.content)
+        foreground = text_color_for(version.color)
+        self.setStyleSheet(
+            f"QPlainTextEdit, QLabel#historyTitle {{ background: {version.color};"
+            f" color: {foreground}; border: none; font-size: 13px; }}"
+            " QLabel#historyTitle { font-weight: bold; font-size: 14px; padding: 2px; }"
+        )
+
+
 class NoteWindow(QWidget):
     """Editor window for a single note."""
 
     changed = Signal(object)  # title or color changed, the list must be refreshed
     closing = Signal(object)  # the window is closing, after its note was saved
+    copy_requested = Signal(object)  # Version to copy into a new note
 
     def __init__(self, note: Note, store: NoteStore):
         super().__init__()
@@ -284,6 +464,7 @@ class NoteWindow(QWidget):
         self.store = store
         self.dirty = False
         self.discarded = False
+        self.geometry_before_history: QByteArray | None = None
 
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -310,12 +491,38 @@ class NoteWindow(QWidget):
         self.content_edit.setPlaceholderText(tr("content_placeholder"))
         self.content_edit.textChanged.connect(self._mark_dirty)
 
+        self.history_button = QToolButton()
+        self.history_button.setText(tr("history"))
+        self.history_button.setCheckable(True)
+        self.history_button.toggled.connect(self._set_history_open)
+
+        self.history = HistoryPanel()
+        self.history.hide()
+        self.history.restore_requested.connect(self.restore_version)
+        self.history.copy_requested.connect(self.copy_requested)
+        self.history.close_requested.connect(lambda: self.history_button.setChecked(False))
+        for keys, step in (("Alt+Left", 1), ("Alt+Right", -1)):
+            shortcut = QShortcut(QKeySequence(keys), self)
+            shortcut.activated.connect(
+                lambda step=step: self.history.isVisible()
+                and self.history.select(self.history.combo.currentIndex() + step))
+
         header = QHBoxLayout()
         header.addWidget(self.title_edit)
+        header.addWidget(self.history_button)
         header.addWidget(self.color_button)
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.addLayout(header)
+        editor_layout.addWidget(self.content_edit)
+        # Past on the left, present on the right.
+        self.splitter = QSplitter()
+        self.splitter.addWidget(self.history)
+        self.splitter.addWidget(editor)
+        self.splitter.setChildrenCollapsible(False)
         layout = QVBoxLayout(self)
-        layout.addLayout(header)
-        layout.addWidget(self.content_edit)
+        layout.addWidget(self.splitter)
 
         self.resize(320, 300)
         self._apply_color()
@@ -356,17 +563,59 @@ class NoteWindow(QWidget):
         self.dirty = True
         self.timer.start()  # restarting it delays the save until 10 s of inactivity
 
-    def save(self) -> None:
+    def save(self, message: str | None = None) -> None:
         self.timer.stop()
         if not self.dirty or self.discarded:
             return
         self.note.content = self.content_edit.toPlainText()
         try:
-            self.store.save(self.note, f'Update "{self.note.display_title}"')
+            self.store.save(self.note, message or f'Update "{self.note.display_title}"')
         except (OSError, subprocess.CalledProcessError) as error:
             QMessageBox.warning(self, APP_NAME, tr("save_failed", error=error))
             return
         self.dirty = False
+        if self.history.isVisible():
+            self._load_history()
+
+    @property
+    def history_open(self) -> bool:
+        return self.geometry_before_history is not None
+
+    def session_geometry(self) -> QByteArray:
+        """The geometry to restore next time: the history panel's widening is not kept."""
+        return self.geometry_before_history or self.saveGeometry()
+
+    def _set_history_open(self, opened: bool) -> None:
+        if opened == self.history_open:
+            return
+        if opened:
+            self.save()  # so that the current text is the newest version listed
+            self.geometry_before_history = self.saveGeometry()
+            self.history.show()
+            self._load_history()
+            if not self.isMaximized():
+                self.resize(max(self.width() * 2, 640), self.height())
+            self.splitter.setSizes([self.width() // 2, self.width() // 2])
+        else:
+            width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
+            self.history.hide()
+            self.geometry_before_history = None
+            if not self.isMaximized():
+                self.resize(width, self.height())
+
+    def _load_history(self) -> None:
+        try:
+            self.history.set_versions(self.store.history(self.note))
+        except (OSError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("history_failed", error=error))
+
+    def restore_version(self, version: Version) -> None:
+        """Overwrite the note with a previous version; the overwritten text stays in history."""
+        self.title_edit.setText(version.title)
+        self.set_color(version.color)
+        self.content_edit.setPlainText(version.content)
+        self.dirty = True
+        self.save(f'Restore "{self.note.display_title}" from {version.commit[:7]}')
 
     def discard(self) -> None:
         """Close without saving, for a note that is being deleted."""
@@ -395,7 +644,7 @@ class MainWindow(QWidget):
         self.list.itemActivated.connect(lambda item: self.open_note(item.data(Qt.UserRole)))
 
         new_button = QPushButton(tr("new"))
-        new_button.clicked.connect(self.create_note)
+        new_button.clicked.connect(lambda: self.create_note())
         delete_button = QPushButton(tr("delete"))
         delete_button.clicked.connect(self.delete_selected)
 
@@ -490,7 +739,7 @@ class MainWindow(QWidget):
         self.session.set_geometry("main", self.saveGeometry())
         self.session.set("open_notes", list(self.windows))
         for note_id, window in self.windows.items():
-            self.session.set_geometry(note_id, window.saveGeometry())
+            self.session.set_geometry(note_id, window.session_geometry())
         self.session.write()
 
     def restore_session(self) -> None:
@@ -512,10 +761,14 @@ class MainWindow(QWidget):
         self.activateWindow()
         self.save_session()
 
-    def create_note(self) -> None:
+    def create_note(self, version: Version | None = None) -> None:
+        """Create a note, empty or with the contents of a previous version of another."""
         note = Note(uuid.uuid4().hex)
+        if version is not None:
+            note.title, note.color, note.content = version.title, version.color, version.content
         try:
-            self.store.save(note, "Create note")
+            self.store.save(note, "Create note" if version is None
+                            else f"Create note from {version.commit[:7]}")
         except (OSError, subprocess.CalledProcessError) as error:
             QMessageBox.warning(self, APP_NAME, tr("create_failed", error=error))
             return
@@ -535,6 +788,7 @@ class MainWindow(QWidget):
             window = NoteWindow(note, self.store)
             window.changed.connect(lambda _note: self.refresh_list())
             window.closing.connect(self._on_note_closing)
+            window.copy_requested.connect(self.create_note)
             window.setAttribute(Qt.WA_DeleteOnClose)
             geometry = self.session.geometry(note_id)
             if geometry is not None:
@@ -552,7 +806,7 @@ class MainWindow(QWidget):
     def _on_note_closing(self, window: NoteWindow) -> None:
         if self.quitting:
             return  # the session was recorded before the windows started closing
-        self.session.set_geometry(window.note.id, window.saveGeometry())
+        self.session.set_geometry(window.note.id, window.session_geometry())
         self.windows.pop(window.note.id, None)
         self.save_session()
 
