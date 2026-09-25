@@ -150,6 +150,16 @@ next launch; `./pense-bete` from the clone does the same, and **Restart** in the
 also available as a command. To remove the entry: `./install.sh --uninstall --dev`
 (the clone itself is kept).
 
+### Tests
+
+```sh
+pip install --user -r requirements-dev.txt
+pytest
+```
+
+The tests run offscreen, in a throwaway home directory: they never touch the
+notes, settings or menu entries of the machine. GitHub runs them on every push.
+
 `PENSE_BETE_REPO` points updates and the standalone installer at another
 repository, such as a fork. `QT_QPA_PLATFORM=wayland` runs the application
 under Wayland instead of XWayland.
