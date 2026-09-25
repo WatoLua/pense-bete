@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Pense-bête
-Comment=Post-its versionnés avec git
-Exec=/home/courrier.intra.laposte.fr/xtfp190/Bureau/me/pense-bete/pense-bete
-Icon=/home/courrier.intra.laposte.fr/xtfp190/Bureau/me/pense-bete/icon.svg
-Terminal=false
-Categories=Utility;
-StartupWMClass=pense-bete
