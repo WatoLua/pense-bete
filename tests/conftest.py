@@ -83,9 +83,11 @@ def commits(repo_dir: Path) -> list[str]:
 
 @pytest.fixture
 def tagged_repo(tmp_path):
-    """A bare copy of this repository with releases v1.9.0 (on the parent commit),
-    v1.10.0 (annotated, on HEAD) and a v2.0.0-rc1 that is not a release.
+    """A bare copy of this repository with releases v1.9.0 (on HEAD), v1.10.0 (annotated,
+    on a commit made on top of it) and a v2.0.0-rc1 that is not a release.
 
+    The newer commit is made here, with HEAD's files, so that the fixture does not
+    depend on the history of the checkout, which CI clones one commit deep.
     Returns the repository and the commit of each tag.
     """
     import subprocess
@@ -96,10 +98,11 @@ def tagged_repo(tmp_path):
 
     repo = tmp_path / "remote.git"
     git("clone", "--quiet", "--bare", "--no-local", str(REPO_DIR), str(repo))
-    head = git("rev-parse", "HEAD", cwd=repo)
-    parent = git("rev-parse", "HEAD~1", cwd=repo)
-    git("tag", "v1.9.0", parent, cwd=repo)
-    git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", "Release",
-        "v1.10.0", head, cwd=repo)
-    git("tag", "v2.0.0-rc1", head, cwd=repo)
-    return repo, {"v1.9.0": parent, "v1.10.0": head}
+    identity = ("-c", "user.name=t", "-c", "user.email=t@t")
+    older = git("rev-parse", "HEAD", cwd=repo)
+    newer = git(*identity, "commit-tree", "HEAD^{tree}", "-p", older, "-m", "Newer", cwd=repo)
+    git("update-ref", "HEAD", newer, cwd=repo)
+    git("tag", "v1.9.0", older, cwd=repo)
+    git(*identity, "tag", "-a", "-m", "Release", "v1.10.0", newer, cwd=repo)
+    git("tag", "v2.0.0-rc1", newer, cwd=repo)
+    return repo, {"v1.9.0": older, "v1.10.0": newer}
