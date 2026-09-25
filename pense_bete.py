@@ -19,9 +19,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QByteArray, QDateTime, QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal,
+    QByteArray, QDateTime, QLibraryInfo, QLocale, QProcess, QRect, QSize, Qt, QTimer,
+    QTranslator, Signal,
 )
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import (
+    QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
@@ -125,6 +128,8 @@ TRANSLATIONS = {
                      "fr": "Rester en arrière-plan à la fermeture"},
     "open_main": {"en": "Open {app}", "fr": "Ouvrir {app}"},
     "history": {"en": "History", "fr": "Historique"},
+    "on_top": {"en": "Keep this note above other windows",
+               "fr": "Garder ce post-it au premier plan"},
     "history_older": {"en": "Older version (Alt+Left)", "fr": "Version précédente (Alt+←)"},
     "history_newer": {"en": "Newer version (Alt+Right)", "fr": "Version suivante (Alt+→)"},
     "history_current": {"en": "current version", "fr": "version actuelle"},
@@ -220,6 +225,25 @@ def install_latest(runner=run) -> None:
             result = runner("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
     if result.returncode:
         raise RuntimeError(command_error(result))
+
+
+def pin_icon() -> QIcon:
+    """A pin lying tilted when off, upright as if pushed in when on."""
+    icon = QIcon()
+    # The emoji is drawn tilted: turned back by 40 degrees, its needle points down.
+    for state, angle in ((QIcon.Off, 0), (QIcon.On, -40)):
+        pixmap = QPixmap(40, 40)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.translate(20, 20)
+        painter.rotate(angle)
+        font = painter.font()
+        font.setPixelSize(26)
+        painter.setFont(font)
+        painter.drawText(QRect(-20, -20, 40, 40), Qt.AlignCenter, "📌")
+        painter.end()
+        icon.addPixmap(pixmap, QIcon.Normal, state)
+    return icon
 
 
 def color_icon(color: str) -> QIcon:
@@ -394,8 +418,8 @@ class NoteStore:
 class Session:
     """What is open across runs: windows and their geometry, recent notes, options.
 
-    Keys: "background" (bool), "main_open" (bool), "open_notes" and "recent" (note
-    ids, most recent first for "recent"), "geometries" (window key -> base64).
+    Keys: "background" (bool), "main_open" (bool), "open_notes", "recent" and "on_top"
+    (note ids, most recent first for "recent"), "geometries" (window key -> base64).
     """
 
     def __init__(self, path: Path):
@@ -420,7 +444,7 @@ class Session:
 
     def forget(self, note_id: str) -> None:
         self.data.get("geometries", {}).pop(note_id, None)
-        for key in ("open_notes", "recent"):
+        for key in ("open_notes", "recent", "on_top"):
             self.data[key] = [i for i in self.data.get(key, []) if i != note_id]
 
     def write(self) -> None:
@@ -548,6 +572,7 @@ class NoteWindow(QWidget):
     changed = Signal(object)  # title or color changed, the list must be refreshed
     closing = Signal(object)  # the window is closing, after its note was saved
     copy_requested = Signal(object)  # Version to copy into a new note
+    on_top_changed = Signal(object)  # the "keep on top" button was toggled
 
     def __init__(self, note: Note, store: NoteStore):
         super().__init__()
@@ -582,6 +607,13 @@ class NoteWindow(QWidget):
         self.content_edit.setPlaceholderText(tr("content_placeholder"))
         self.content_edit.textChanged.connect(self._mark_dirty)
 
+        self.on_top_button = QToolButton()
+        self.on_top_button.setCheckable(True)
+        self.on_top_button.setIcon(pin_icon())
+        self.on_top_button.setIconSize(QSize(22, 22))
+        self.on_top_button.setToolTip(tr("on_top"))
+        self.on_top_button.toggled.connect(self._on_top_toggled)
+
         self.history_button = QToolButton()
         self.history_button.setText(tr("history"))
         self.history_button.setCheckable(True)
@@ -602,6 +634,7 @@ class NoteWindow(QWidget):
         header.addWidget(self.title_edit)
         header.addWidget(self.history_button)
         header.addWidget(self.color_button)
+        header.addWidget(self.on_top_button)
         editor = QWidget()
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(0, 0, 0, 0)
@@ -693,6 +726,24 @@ class NoteWindow(QWidget):
             self.geometry_before_history = None
             if not self.isMaximized():
                 self.resize(width, self.height())
+
+    def set_on_top(self, on_top: bool) -> None:
+        self.on_top_button.blockSignals(True)
+        self.on_top_button.setChecked(on_top)
+        self.on_top_button.blockSignals(False)
+        if on_top == bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
+            return
+        # Changing the flags recreates the native window, which then needs showing again
+        # where it was.
+        visible, geometry = self.isVisible(), self.saveGeometry()
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on_top)
+        if visible:
+            self.restoreGeometry(geometry)
+            self.show()
+
+    def _on_top_toggled(self, on_top: bool) -> None:
+        self.set_on_top(on_top)
+        self.on_top_changed.emit(self)
 
     def _load_history(self) -> None:
         try:
@@ -1004,10 +1055,12 @@ class MainWindow(QWidget):
             window.changed.connect(lambda _note: self.refresh_list())
             window.closing.connect(self._on_note_closing)
             window.copy_requested.connect(self.create_note)
+            window.on_top_changed.connect(self._on_note_on_top_changed)
             window.setAttribute(Qt.WA_DeleteOnClose)
             geometry = self.session.geometry(note_id)
             if geometry is not None:
                 window.restoreGeometry(geometry)
+            window.set_on_top(note_id in self.session.get("on_top", []))
             self.windows[note_id] = window
         window.show()
         window.raise_()
@@ -1016,6 +1069,13 @@ class MainWindow(QWidget):
             others = [i for i in self.session.get("recent", []) if i != note_id]
             self.session.set("recent", [note_id, *others][:RECENT_NOTES])
             self.refresh_tray_menu()
+        self.save_session()
+
+    def _on_note_on_top_changed(self, window: NoteWindow) -> None:
+        on_top = [i for i in self.session.get("on_top", []) if i != window.note.id]
+        if window.on_top_button.isChecked():
+            on_top.append(window.note.id)
+        self.session.set("on_top", on_top)
         self.save_session()
 
     def _on_note_closing(self, window: NoteWindow) -> None:

@@ -13,6 +13,8 @@ The interface is in French or English, following the system language.
   notes; double-click a note to open it.
 - A note's title and color (seven presets, or any color with **Other…**) are
   shown in the list.
+- The 📌 button keeps a note above the other windows; the pin stands upright
+  while it is on.
 - Notes are saved automatically 10 seconds after the last change, and
   immediately when their window is closed.
 
