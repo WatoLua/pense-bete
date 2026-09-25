@@ -1,7 +1,9 @@
 """The notes on disk: one directory and git repository per note."""
 
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -15,6 +17,19 @@ from .i18n import tr
 
 # Each note lives in its own directory and git repository: <DATA_DIR>/<note id>/note.json.
 NOTE_FILE = "note.json"
+
+
+def remove_tree(path: Path) -> None:
+    """Delete a directory and everything in it, read-only files included: git makes its
+    objects read-only, which Windows refuses to delete as they are."""
+    def make_writable_and_retry(function, failed_path, _error) -> None:
+        os.chmod(failed_path, stat.S_IWRITE)
+        function(failed_path)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=make_writable_and_retry)
+    else:
+        shutil.rmtree(path, onerror=make_writable_and_retry)
 
 
 class GitRepo:
@@ -192,4 +207,4 @@ class NoteStore:
     def erase(self, note: Note) -> None:
         """Remove the note for good, with its repository and so its whole history."""
         self.repos.pop(note.id, None)
-        shutil.rmtree(self.path / note.id)
+        remove_tree(self.path / note.id)

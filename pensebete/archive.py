@@ -8,7 +8,7 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from .storage import NOTE_FILE, Note, NoteStore
+from .storage import NOTE_FILE, Note, NoteStore, remove_tree
 
 # A note's directory name: its id, as NoteStore creates them.
 NOTE_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
@@ -91,7 +91,8 @@ def _add_notes(store: NoteStore, extracted: Path, note_ids: list[str]) -> tuple[
         shutil.move(source, target)
         # Without a repository in the archive, the note starts a history of its own.
         if not (target / ".git").is_dir():
-            shutil.rmtree(target / ".git", ignore_errors=True)
+            if (target / ".git").exists():
+                remove_tree(target / ".git")
         store.save(note, f'Import "{note.display_title}"')
         added.append(note)
     return added, skipped

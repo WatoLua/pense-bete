@@ -358,3 +358,11 @@ def test_without_alt_the_mouse_edits_as_usual(qtbot, window):
 
     assert window.geometry() == geometry
     assert window.resize_origin is None
+
+
+def test_ctrl_t_selects_the_header_even_when_the_window_wraps_it(qtbot, focused):
+    focused.resize(200, 300)  # "| Column 1 | Column 2 |" no longer fits on one line
+
+    qtbot.keyClick(focused.content_edit, Qt.Key_T, Qt.ControlModifier)
+
+    assert focused.content_edit.textCursor().selectedText() == "Column 1"

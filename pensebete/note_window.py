@@ -394,14 +394,15 @@ class NoteWindow(QWidget):
 
     def insert_table(self) -> None:
         self._insert_block(tr("table_template"))
-        # Ready to type the first column's name.
+        # Ready to type the first column's name. By lines of text, not of screen, which a
+        # narrow window wraps.
         cursor = self.content_edit.textCursor()
-        cursor.movePosition(QTextCursor.Up, n=2)
-        cursor.movePosition(QTextCursor.StartOfBlock)
-        cursor.movePosition(QTextCursor.Right, n=2)
-        cursor.movePosition(QTextCursor.EndOfWord, QTextCursor.KeepAnchor)
-        cursor.movePosition(QTextCursor.NextWord, QTextCursor.KeepAnchor)
-        cursor.movePosition(QTextCursor.EndOfWord, QTextCursor.KeepAnchor)
+        cursor.movePosition(QTextCursor.PreviousBlock, n=2)
+        header = cursor.block()
+        name = header.text().split("|")[1].strip()
+        start = header.position() + header.text().index(name)
+        cursor.setPosition(start)
+        cursor.setPosition(start + len(name), QTextCursor.KeepAnchor)
         self.content_edit.setTextCursor(cursor)
 
     def copy_all(self) -> None:
@@ -625,6 +626,14 @@ class NoteWindow(QWidget):
         self.discarded = True
         self.timer.stop()
         self.close()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # While the history is open, a resize from the application itself, the layout
+        # making room for the panel included, is not the user's: the width to give back
+        # on closing stays the one from before the history.
+        if self.history_open and not event.spontaneous():
+            self.width_with_history = self.width()
 
     def closeEvent(self, event) -> None:
         self.save()

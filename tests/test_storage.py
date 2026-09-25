@@ -111,3 +111,17 @@ def test_to_dict_leaves_out_deleted_until_set():
 def test_display_title_falls_back_for_a_blank_title():
     assert Note("a", "  ").display_title == "(untitled)"
     assert Note("a", " Hi ").display_title == "Hi"
+
+
+def test_erase_removes_read_only_files_too(store):
+    import os
+    import stat
+    note = Note("a")
+    store.save(note, "Create")
+    for file in (store.path / "a" / ".git" / "objects").rglob("*"):
+        if file.is_file():
+            os.chmod(file, stat.S_IREAD)
+
+    store.erase(note)
+
+    assert not (store.path / "a").exists()
