@@ -73,6 +73,8 @@ TRANSLATIONS = {
                             "fr": "Insérer une colonne à droite"},
     "table_delete_row": {"en": "Delete the row", "fr": "Supprimer la ligne"},
     "table_delete_column": {"en": "Delete the column", "fr": "Supprimer la colonne"},
+    "copy_all": {"en": "Copy the whole note", "fr": "Copier tout le post-it"},
+    "clear_all": {"en": "Clear the whole note", "fr": "Effacer tout le post-it"},
     "insert_table": {"en": "Insert a table", "fr": "Insérer un tableau"},
     "table_template": {"en": "| Column 1 | Column 2 |\n| -------- | -------- |\n|          |          |",
                        "fr": "| Colonne 1 | Colonne 2 |\n| --------- | --------- |\n|           |           |"},

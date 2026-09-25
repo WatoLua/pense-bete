@@ -6,6 +6,7 @@ from datetime import datetime
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QColorDialog,
     QComboBox,
     QFrame,
@@ -279,6 +280,12 @@ class NoteWindow(QWidget):
         for keys, step in ((QKeySequence.ZoomIn, 1), ("Ctrl+=", 1), (QKeySequence.ZoomOut, -1)):
             QShortcut(QKeySequence(keys), self, lambda step=step: self.zoom(step))
         QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.set_font_size(DEFAULT_FONT_SIZE))
+        QShortcut(QKeySequence("Ctrl+L"), self, self.insert_tasks)
+        QShortcut(QKeySequence("Ctrl+T"), self, self.insert_table)
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self, self.copy_all)
+        # Ctrl+Delete is a key of the editor itself, which deletes the next word: it is
+        # taken before the editor sees it.
+        self.content_edit.installEventFilter(self)
 
         self.font_size = DEFAULT_FONT_SIZE
         self.resize(320, 300)
@@ -333,12 +340,41 @@ class NoteWindow(QWidget):
                 item.setEnabled(enabled)
                 # Shown in the menu; the editor handles the keys itself.
                 item.setShortcut(QKeySequence(shortcut))
-        if self.markdown:
-            menu.addSeparator()
-            menu.addAction(tr("insert_tasks"), lambda: self._insert_block(TASKS_TEMPLATE))
-            menu.addAction(tr("insert_table"), lambda: self._insert_block(tr("table_template")))
+        menu.addSeparator()
+        for label, shortcut, action in (
+                ("insert_tasks", "Ctrl+L", self.insert_tasks),
+                ("insert_table", "Ctrl+T", self.insert_table),
+                ("copy_all", "Ctrl+Shift+C", self.copy_all),
+                ("clear_all", "Ctrl+Del", self.clear_all)):
+            item = menu.addAction(tr(label), action)
+            item.setShortcut(QKeySequence(shortcut))  # shown only: the window handles the keys
         menu.exec(self.content_edit.viewport().mapToGlobal(position))
         menu.deleteLater()
+
+    def insert_tasks(self) -> None:
+        self._insert_block(TASKS_TEMPLATE)
+
+    def insert_table(self) -> None:
+        self._insert_block(tr("table_template"))
+        # Ready to type the first column's name.
+        cursor = self.content_edit.textCursor()
+        cursor.movePosition(QTextCursor.Up, n=2)
+        cursor.movePosition(QTextCursor.StartOfBlock)
+        cursor.movePosition(QTextCursor.Right, n=2)
+        cursor.movePosition(QTextCursor.EndOfWord, QTextCursor.KeepAnchor)
+        cursor.movePosition(QTextCursor.NextWord, QTextCursor.KeepAnchor)
+        cursor.movePosition(QTextCursor.EndOfWord, QTextCursor.KeepAnchor)
+        self.content_edit.setTextCursor(cursor)
+
+    def copy_all(self) -> None:
+        QApplication.clipboard().setText(self.content_edit.toPlainText())
+
+    def clear_all(self) -> None:
+        """Empty the note, as one edit that undo takes back; the history keeps it too."""
+        cursor = self.content_edit.textCursor()
+        cursor.select(QTextCursor.Document)
+        cursor.removeSelectedText()
+        self.content_edit.setFocus()
 
     def _insert_block(self, text: str) -> None:
         """Insert lines of Markdown on lines of their own, at the cursor."""
@@ -363,6 +399,11 @@ class NoteWindow(QWidget):
         )
 
     def eventFilter(self, watched, event) -> bool:
+        if watched is self.content_edit and event.type() == QEvent.KeyPress \
+                and event.key() == Qt.Key_Delete \
+                and event.modifiers() & ~Qt.KeypadModifier == Qt.ControlModifier:
+            self.clear_all()
+            return True
         if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
             if event.angleDelta().y():
                 self.zoom(1 if event.angleDelta().y() > 0 else -1)

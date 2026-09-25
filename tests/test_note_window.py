@@ -210,3 +210,49 @@ def test_the_text_size_stays_within_bounds(window):
     assert window.font_size == 40
     window.set_font_size(1)
     assert window.font_size == 8
+
+
+@pytest.fixture
+def focused(qtbot, window):
+    window.show()
+    window.activateWindow()
+    qtbot.waitActive(window)
+    window.content_edit.setFocus()
+    window.content_edit.moveCursor(window.content_edit.textCursor().MoveOperation.End)
+    return window
+
+
+def test_ctrl_t_inserts_a_table_with_its_first_header_selected(qtbot, focused):
+    qtbot.keyClick(focused.content_edit, Qt.Key_T, Qt.ControlModifier)
+
+    text = focused.content_edit.toPlainText().splitlines()
+    assert text[0] == "first"
+    assert text[1].startswith("| Column 1 | Column 2 |")
+    assert focused.content_edit.textCursor().selectedText() == "Column 1"
+
+
+def test_ctrl_l_inserts_a_task(qtbot, focused):
+    qtbot.keyClick(focused.content_edit, Qt.Key_L, Qt.ControlModifier)
+
+    assert focused.content_edit.toPlainText() == "first\n- [ ] "
+
+
+def test_ctrl_shift_c_copies_the_whole_note(qtbot, focused):
+    from PySide6.QtWidgets import QApplication
+    focused.content_edit.setPlainText("line one\nline two")
+    focused.title_edit.setFocus()  # from anywhere in the window
+
+    qtbot.keyClick(focused.title_edit, Qt.Key_C, Qt.ControlModifier | Qt.ShiftModifier)
+
+    assert QApplication.clipboard().text() == "line one\nline two"
+
+
+def test_ctrl_delete_clears_the_note_and_undo_brings_it_back(qtbot, focused):
+    focused.content_edit.setPlainText("line one\nline two")
+
+    qtbot.keyClick(focused.content_edit, Qt.Key_Delete, Qt.ControlModifier)
+    assert focused.content_edit.toPlainText() == ""
+    assert focused.dirty
+
+    focused.content_edit.undo()
+    assert focused.content_edit.toPlainText() == "line one\nline two"

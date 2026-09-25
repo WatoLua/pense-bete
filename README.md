@@ -21,6 +21,9 @@ The interface is in French or English, following the system language.
 - Each note has its own text size: Ctrl with the mouse wheel, Ctrl++ or Ctrl+-
   zoom it, Ctrl+0 goes back to the default. The size is kept for the next
   launch.
+- In a note, Ctrl+L inserts a task (`- [ ] `), Ctrl+T a table, its first
+  header selected; Ctrl+Shift+C copies the whole note, Ctrl+Delete clears it
+  (Ctrl+Z brings it back). These are also in the right-click menu.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and
@@ -47,7 +50,7 @@ The text stays exactly as typed, so unchecking the option loses nothing.
   - Ctrl+Enter adds a row below, Ctrl+Shift+Enter a column to the right;
   - Ctrl+Backspace deletes the row, Ctrl+Shift+Backspace the column;
   - the right-click menu also adds rows and columns, and deletes them.
-- The right-click menu inserts a task list or a table.
+- Ctrl+L and Ctrl+T, or the right-click menu, insert a task or a table.
 
 ### History
 
