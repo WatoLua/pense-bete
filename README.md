@@ -19,7 +19,7 @@ The interface is in French.
 ## Installation
 
 ```sh
-git clone <repository-url>
+git clone https://github.com/WatoLua/pense-bete.git
 cd pense-bete
 ./install.sh
 ```
