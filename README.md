@@ -38,8 +38,8 @@ menu, their Markdown is shown formatted in place: headings, **bold**, *italic*,
 The text stays exactly as typed, so unchecking the option loses nothing.
 
 - `- [ ]` is a task, for to-do lists and checklists alike: a click on its box
-  turns it to `[v]`, ok, in green, then to `[x]`, ko, in red, then back to
-  `[ ]`.
+  turns it to `[v]`, ok, in green and struck through, then to `[x]`, ko, in
+  red, then back to `[ ]`.
 - Enter at the end of a list item starts the next one — same bullet, next
   number, a new unchecked box; Enter on an empty item ends the list.
 - A table (`| a | b |` lines) is shown in a fixed font. Its columns are aligned

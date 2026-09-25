@@ -123,6 +123,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             state = task.group(2).lower()
             if state != " ":
                 self._merge(task.end(1), task.end(), "ok" if state == "v" else "ko")
+            if state == "v":  # what is ok is dealt with: its text, not the space before it
+                start = len(text) - len(text[task.end():].lstrip())
+                self._merge(start, len(text), "strike")
         elif LIST_ITEM.match(text):
             item = LIST_ITEM.match(text)
             self._merge(len(item.group(1)), item.end(), "marker")

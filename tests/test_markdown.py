@@ -67,6 +67,9 @@ def test_markdown_is_formatted_without_changing_the_text(qtbot, window, store):
     assert char_format(window, 3, 3).foreground().color().name() == "#c62828"  # ko, in red
     assert char_format(window, 4, 3).foreground().color().name() == "#2e7d32"  # ok, in green
     assert char_format(window, 2, 3).foreground().color().name() != "#2e7d32"  # to do
+    assert char_format(window, 4, 8).fontStrikeOut()  # an ok task is struck through
+    ko_text = char_format(window, 3, 8)
+    assert ko_text is None or not ko_text.fontStrikeOut()  # a ko task is not
     assert char_format(window, 0, 3).font().pixelSize() > 13  # the heading
     assert window.content_edit.toPlainText() == text
     assert not window.dirty
