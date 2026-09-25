@@ -75,6 +75,7 @@ class MainWindow(QWidget):
         self.search.textChanged.connect(lambda _text: self.refresh_list())
         self.search.returnPressed.connect(self._open_first_match)
         QShortcut(QKeySequence.Find, self, self._focus_search)
+        QShortcut(QKeySequence("Ctrl+W"), self, self.close)
         QShortcut(QKeySequence(Qt.Key_Escape), self.search, self.search.clear)
 
         self.list = QListWidget()

@@ -24,7 +24,8 @@ The interface is in French or English, following the system language.
 - In a note, Ctrl+L inserts a task (`- [ ] `), Ctrl+T a table, its first
   header selected; Ctrl+Shift+C copies the whole note, Ctrl+Delete clears it
   (Ctrl+Z brings it back). These are also in the right-click menu. Ctrl+Y
-  redoes, as does Ctrl+Shift+Z.
+  redoes, as does Ctrl+Shift+Z. Ctrl+S saves at once, and Ctrl+W closes the
+  window, the note or the list, as Alt+F4 does.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and

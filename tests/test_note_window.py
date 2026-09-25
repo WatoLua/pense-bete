@@ -214,9 +214,9 @@ def test_the_text_size_stays_within_bounds(window):
 
 @pytest.fixture
 def focused(qtbot, window):
-    window.show()
-    window.activateWindow()
-    qtbot.waitActive(window)
+    with qtbot.waitActive(window):
+        window.show()
+        window.activateWindow()
     window.content_edit.setFocus()
     window.content_edit.moveCursor(window.content_edit.textCursor().MoveOperation.End)
     return window
@@ -256,3 +256,23 @@ def test_ctrl_delete_clears_the_note_and_undo_brings_it_back(qtbot, focused):
 
     focused.content_edit.undo()
     assert focused.content_edit.toPlainText() == "line one\nline two"
+
+
+def test_ctrl_s_saves_at_once(qtbot, focused, store):
+    qtbot.keyClicks(focused.content_edit, " edited")
+
+    qtbot.keyClick(focused.content_edit, Qt.Key_S, Qt.ControlModifier)
+
+    assert not focused.dirty
+    assert store.load_all()[0].content == "first edited"
+
+
+def test_ctrl_w_closes_the_note_after_saving_it(qtbot, focused, store):
+    closed = []
+    focused.closing.connect(closed.append)
+    qtbot.keyClicks(focused.content_edit, " edited")
+
+    qtbot.keyClick(focused.content_edit, Qt.Key_W, Qt.ControlModifier)
+
+    assert closed == [focused]
+    assert store.load_all()[0].content == "first edited"

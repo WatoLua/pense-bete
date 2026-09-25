@@ -280,6 +280,8 @@ class NoteWindow(QWidget):
         for keys, step in ((QKeySequence.ZoomIn, 1), ("Ctrl+=", 1), (QKeySequence.ZoomOut, -1)):
             QShortcut(QKeySequence(keys), self, lambda step=step: self.zoom(step))
         QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.set_font_size(DEFAULT_FONT_SIZE))
+        QShortcut(QKeySequence.Save, self, lambda: self.save())
+        QShortcut(QKeySequence("Ctrl+W"), self, self.close)
         QShortcut(QKeySequence("Ctrl+L"), self, self.insert_tasks)
         QShortcut(QKeySequence("Ctrl+T"), self, self.insert_table)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self, self.copy_all)

@@ -1,3 +1,4 @@
+from PySide6.QtCore import Qt
 from datetime import datetime, timedelta
 
 from pensebete.main_window import MainWindow
@@ -283,3 +284,15 @@ def test_export_then_import_from_the_menu(main_window, store, tmp_path, monkeypa
     export_notes(other_store, archive)
     main_window.import_archive()
     assert "From elsewhere" in listed(main_window)
+
+
+def test_ctrl_w_closes_the_list_as_alt_f4_does(qtbot, main_window):
+    main_window.background_action.setChecked(True)
+    with qtbot.waitActive(main_window):
+        main_window.show()
+        main_window.activateWindow()
+
+    qtbot.keyClick(main_window.list, Qt.Key_W, Qt.ControlModifier)
+
+    assert not main_window.isVisible()
+    assert not main_window.quitting  # kept running in the background, as asked
