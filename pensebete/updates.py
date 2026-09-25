@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication
 
 from .config import APP_DIR, RELEASE_FILE, REPO_URL, SUBPROCESS_OPTIONS, VERSION_FILE, WINDOWS
 from .i18n import tr
+from .storage import remove_tree
 
 
 def run(*args: str) -> subprocess.CompletedProcess:
@@ -115,14 +116,17 @@ def latest_release(runner=run, fetcher=http_get, use_git: bool | None = None) ->
 
 
 def installer(directory: Path, *options: str, target: Path | None = None,
-              release: Release | None = None) -> list[str]:
+              release: Release | None = None, wait_pid: int | None = None) -> list[str]:
     """The command running the installer of a directory with options such as "yes" or
     "uninstall": install.sh on Linux, install.ps1 on Windows, each with its own syntax.
 
     A release's tag and commit are passed on for the installer to record, which it
-    cannot ask git for in a downloaded archive.
+    cannot ask git for in a downloaded archive. wait_pid, on Windows, has it wait for
+    that process to end first.
     """
     values = {"commit": release.commit, "release": release.tag} if release else {}
+    if wait_pid is not None:
+        values["waitpid"] = str(wait_pid)
     if WINDOWS:
         command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                    "-File", str(directory / "install.ps1")]
@@ -199,6 +203,47 @@ def release_notes(release: Release, runner=run, fetcher=http_get) -> str:
             return ""  # a lightweight tag: its "message" would be the commit's
         result = runner("git", "-C", temporary, "for-each-ref", "--format=%(contents)", ref)
         return result.stdout.strip() if result.returncode == 0 else ""
+
+
+BUNDLE_ASSET = "pense-bete-windows.zip"
+# What the installer an update hands over to reports, since it runs without a window.
+HANDOVER_LOG = Path(tempfile.gettempdir()) / "pense-bete-install.log"
+
+
+def bundle_url(release: Release, fetcher=http_get) -> str:
+    """Where the standalone build of a release is attached on GitHub."""
+    api = github_api()
+    if not api:
+        raise RuntimeError(tr("update_needs_github", url=REPO_URL))
+    try:
+        assets = json.loads(fetcher(f"{api}/releases/tags/{release.tag}")).get("assets", [])
+        return next(asset["browser_download_url"] for asset in assets
+                    if asset["name"] == BUNDLE_ASSET)
+    except (RuntimeError, ValueError, KeyError, TypeError, StopIteration) as error:
+        # The build runs for a few minutes after a release is tagged.
+        raise RuntimeError(tr("bundle_missing", version=release.tag)) from error
+
+
+def stage_update(release: Release, fetcher=http_get) -> Path:
+    """Download and unpack a release's standalone build, for the installer to put in
+    place once the application has quit: Windows forbids replacing a running program.
+    Returns its directory, which the installer removes afterwards."""
+    staging = Path(tempfile.mkdtemp(prefix="pense-bete-update-"))
+    try:
+        extract_archive(fetcher(bundle_url(release, fetcher)), staging / "Pense-bete")
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as error:
+        remove_tree(staging)
+        raise RuntimeError(str(error)) from error
+    return staging / "Pense-bete"
+
+
+def hand_over(command: list[str]) -> None:
+    """Start an installer that waits for this process to end, and let it run on: it
+    goes on once the application has quit, its output in HANDOVER_LOG."""
+    with open(HANDOVER_LOG, "w", encoding="utf-8") as log:
+        subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
 
 def git_version(runner=run) -> str:

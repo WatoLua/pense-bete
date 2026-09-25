@@ -167,6 +167,10 @@ def fake_github():
             if file.is_file() and not {".git", "__pycache__", ".pytest_cache"} & set(relative.parts):
                 output.write(file, f"someone-pense-bete-1a2b3c4/{relative.as_posix()}")
     commit = "1a2b3c4d" * 5
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w") as output:
+        for name, data in fake_bundle_files().items():
+            output.writestr(f"Pense-bete/{name}", data)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -178,6 +182,11 @@ def fake_github():
                 ]).encode()
             elif self.path == "/zip":
                 body = archive.getvalue()
+            elif self.path == "/releases/tags/v1.10.0":
+                body = json.dumps({"assets": [{"name": "pense-bete-windows.zip",
+                                               "browser_download_url": f"{base}/bundle"}]}).encode()
+            elif self.path == "/bundle":
+                body = bundle.getvalue()
             else:
                 self.send_error(404)
                 return
@@ -194,3 +203,14 @@ def fake_github():
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}", commit
     server.shutdown()
+
+
+def fake_bundle_files() -> dict[str, bytes]:
+    """A standalone build's files, its executable a harmless program of the system that
+    prints and exits, so that launching it does no harm."""
+    whoami = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "whoami.exe"
+    files = {"Pense-bete.exe": whoami.read_bytes() if whoami.exists() else b"MZ",
+             "_internal/python312.dll": b"library"}
+    for name in ("icon.svg", "icon.ico", "LICENSE", "install.ps1"):
+        files[name] = (REPO_DIR / name).read_bytes()
+    return files

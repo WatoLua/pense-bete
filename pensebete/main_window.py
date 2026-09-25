@@ -1,12 +1,13 @@
 """The list of notes, which opens their windows and holds the application's menus."""
 
+import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
-from pathlib import Path
 import unicodedata
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QProcess, Qt, Signal
 from PySide6.QtGui import QActionGroup, QColor, QIcon
@@ -43,8 +44,8 @@ from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
 from .updates import (
-    can_update, command_error, git_available, install_release, installer, release_notes,
-    run_command, update_available,
+    Release, can_update, command_error, git_available, hand_over, install_release, installer,
+    release_notes, run_command, stage_update, update_available,
 )
 
 
@@ -75,6 +76,8 @@ class MainWindow(QWidget):
         self.notes: list[Note] = store.load_all()
         self.windows: dict[str, NoteWindow] = {}
         self.quitting = False
+        # A standalone build downloaded for an update: (its directory, the release).
+        self.staged_update: tuple[Path, Release] | None = None
         server.newConnection.connect(self._on_other_instance)
 
         self.search = QLineEdit()
@@ -479,18 +482,39 @@ class MainWindow(QWidget):
             if release is None:
                 QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
-            box = QMessageBox(QMessageBox.Question, tr("update"),
-                              tr("update_available", version=release.tag),
+            text = tr("update_available", version=release.tag)
+            if FROZEN:
+                text += "\n" + tr("update_restarts")
+            box = QMessageBox(QMessageBox.Question, tr("update"), text,
                               QMessageBox.Yes | QMessageBox.No, self)
             box.setInformativeText(release_notes(release, run_command))
             if box.exec() != QMessageBox.Yes:
                 return
             self.save_all()
+            if FROZEN:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    self.staged_update = (stage_update(release), release)
+                finally:
+                    QApplication.restoreOverrideCursor()
+                self._apply_staged_update(launch=True)
+                self.quit_app()
+                return
             install_release(release, run_command)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             QMessageBox.warning(self, APP_NAME, tr("update_failed", error=error))
             return
         self._offer_restart()
+
+    def _apply_staged_update(self, launch: bool) -> None:
+        """Hand a downloaded standalone build over to its installer, which puts it in
+        place once this process has ended, and launches it again when asked."""
+        if self.staged_update is None:
+            return
+        staging, release = self.staged_update
+        self.staged_update = None
+        hand_over(installer(staging, "yes", "removesource", *(["launch"] if launch else []),
+                            target=APP_DIR, release=release, wait_pid=os.getpid()))
 
     def _offer_restart(self, notes: str = "") -> None:
         box = QMessageBox(QMessageBox.Question, tr("update"), tr("update_done"),
@@ -509,6 +533,12 @@ class MainWindow(QWidget):
         """Quit, saving the session and the notes, and launch the application again."""
         # Closed first, so the new instance does not hand itself over to this one.
         self.server.close()
+        if self.staged_update is not None:
+            # The installer launches the new build once it is in place: the old one,
+            # running meanwhile, would keep its files from being replaced.
+            self._apply_staged_update(launch=True)
+            self.quit_app()
+            return
         self.quit_app()
         QProcess.startDetached(sys.executable, [] if FROZEN else [str(APP_DIR / "pense_bete.py")])
 
@@ -521,7 +551,11 @@ class MainWindow(QWidget):
         def check_and_install() -> None:
             try:
                 release = update_available()
-                if release is not None:
+                if release is not None and FROZEN:
+                    # Put in place once the application quits, which it may do at once.
+                    self.staged_update = (stage_update(release), release)
+                    self.auto_updated.emit(release.tag, release_notes(release))
+                elif release is not None:
                     install_release(release)
                     self.auto_updated.emit(release.tag, release_notes(release))
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
@@ -530,7 +564,8 @@ class MainWindow(QWidget):
         threading.Thread(target=check_and_install, daemon=True).start()
 
     def _on_auto_updated(self, release: str, notes: str) -> None:
-        # The files are replaced; this process keeps running the version it loaded.
+        # The files are replaced, or for the standalone build ready to be; this process
+        # keeps running the version it loaded.
         if self.tray.isVisible() and not self.isVisible():
             self.tray.showMessage(APP_NAME, tr("auto_updated", version=release),
                                   QIcon(str(ICON_PATH)))
@@ -547,6 +582,9 @@ class MainWindow(QWidget):
             return
         purging = purge.isChecked()
         self.save_all()
+        if FROZEN:
+            self._uninstall_after_exit(purging)
+            return
         try:
             result = run_command(*installer(APP_DIR, "uninstall", "yes",
                                             *(["purge"] if purging else []),
@@ -569,6 +607,23 @@ class MainWindow(QWidget):
         self.close()
         QApplication.quit()
 
+    def _uninstall_after_exit(self, purging: bool) -> None:
+        """The standalone build cannot remove its own files while it runs: its installer
+        does, once the application has quit, which it does at once."""
+        hand_over(installer(APP_DIR, "uninstall", "yes", *(["purge"] if purging else []),
+                            wait_pid=os.getpid()))
+        QMessageBox.information(self, APP_NAME, tr("uninstall_after_exit"))
+        if not purging:
+            self.quit_app()
+            return
+        # Quitting as usual would write the session and the open notes back to disk.
+        self.quitting = True
+        for window in list(self.windows.values()):
+            window.discard()
+        self.tray.hide()
+        self.close()
+        QApplication.quit()
+
     def quit_app(self) -> None:
         """Record the session, then close every window, saving the notes, and quit."""
         if self.quitting:
@@ -578,6 +633,8 @@ class MainWindow(QWidget):
         for window in list(self.windows.values()):
             window.close()
         self.tray.hide()
+        # An update downloaded and not installed yet goes in once the application is gone.
+        self._apply_staged_update(launch=False)
         self.close()
         QApplication.quit()
 

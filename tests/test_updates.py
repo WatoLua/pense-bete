@@ -247,3 +247,51 @@ def test_an_archive_that_climbs_out_is_refused(installed):
 
     with pytest.raises(RuntimeError):
         updates.install_release(release, lambda *args: completed(), fetcher)
+
+
+def test_the_standalone_build_is_found_among_the_release_assets(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    release = updates.Release("v1.0.0", "c")
+    fetcher = fake_github({f"{API}/releases/tags/v1.0.0": {"assets": [
+        {"name": "other.zip", "browser_download_url": "other"},
+        {"name": "pense-bete-windows.zip", "browser_download_url": "the-build"}]}})
+
+    assert updates.bundle_url(release, fetcher) == "the-build"
+    with pytest.raises(RuntimeError, match="v2.0.0"):  # not built yet
+        updates.bundle_url(updates.Release("v2.0.0", "c"), fetcher)
+
+
+def test_an_update_of_the_standalone_build_is_unpacked_for_the_installer(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    release = updates.Release("v1.0.0", "c")
+    fetcher = fake_github({
+        f"{API}/releases/tags/v1.0.0": {"assets": [
+            {"name": "pense-bete-windows.zip", "browser_download_url": "the-build"}]},
+        "the-build": zip_of({"Pense-bete.exe": "exe", "install.ps1": ""}, top="Pense-bete"),
+    })
+
+    staged = updates.stage_update(release, fetcher)
+
+    assert (staged / "Pense-bete.exe").read_text() == "exe"
+    updates.remove_tree(staged.parent)
+
+
+def test_the_installer_can_wait_for_the_application_to_end(monkeypatch, tmp_path):
+    monkeypatch.setattr(updates, "WINDOWS", True)
+
+    command = updates.installer(tmp_path, "yes", "launch", target=tmp_path / "app", wait_pid=42)
+
+    assert command[-5:] == ["-Launch", "-Waitpid", "42", "-Target", str(tmp_path / "app")]
+
+
+def test_the_hand_over_runs_on_without_a_window(monkeypatch, tmp_path):
+    started = []
+    monkeypatch.setattr(updates, "HANDOVER_LOG", tmp_path / "install.log")
+    monkeypatch.setattr(updates.subprocess, "Popen", lambda command, **options: started.append(
+        (command, options)))
+
+    updates.hand_over(["powershell", "-File", "install.ps1"])
+
+    [(command, options)] = started
+    assert command == ["powershell", "-File", "install.ps1"]
+    assert options["stdin"] == updates.subprocess.DEVNULL

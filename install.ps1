@@ -11,6 +11,10 @@ The Windows counterpart of install.sh.
   .\install.ps1 -Dev               register this clone as "Pense-bete (dev)"
   -Yes                             ask nothing, take the default answers
   -Commit <sha> -Release <tag>     what is installed, for a copy without git
+  -Standalone                      install the standalone version, which carries
+                                   Python: offered anyway when Python is missing
+  -WaitPid <pid> -Launch           wait for that process to end before installing,
+                                   then launch the application: for its own updates
 
 Also runs on its own, without a clone of the repository; it then installs the newest
 release, the highest vX.Y.Z tag:
@@ -24,7 +28,11 @@ param(
     [switch]$Dev,
     [switch]$Yes,
     [string]$Commit = "",
-    [string]$Release = ""
+    [string]$Release = "",
+    [switch]$Standalone,
+    [int]$WaitPid = 0,
+    [switch]$Launch,
+    [switch]$RemoveSource
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +56,11 @@ $AppData = Join-Path $env:APPDATA $AppId
 $DataDir = if ($env:PENSE_BETE_DIR) { $env:PENSE_BETE_DIR } else { Join-Path $AppData "notes" }
 $Files = "pense_bete.py", "icon.svg", "icon.ico", "requirements.txt", "install.ps1", "install.sh", "LICENSE"
 $Package = "pensebete"
+# The standalone version: an executable carrying Python and PySide6, built for every
+# release and attached to it on GitHub.
+$Executable = "Pense-bete.exe"
+$BundleAsset = "pense-bete-windows.zip"
+$Bundle = $false
 
 # Messages are in French when Windows is, in English otherwise. This file is ASCII, so
 # that Windows PowerShell reads it right with or without a byte order mark, which
@@ -114,14 +127,19 @@ function Do-Uninstall {
     # The shortcut records where the application was installed.
     $installDir = ""
     if (Test-Path -LiteralPath $Shortcut) {
-        $arguments = (New-Object -ComObject WScript.Shell).CreateShortcut($Shortcut).Arguments
-        if ($arguments -match '"([^"]+)\\pense_bete\.py"') { $installDir = $Matches[1] }
+        $link = (New-Object -ComObject WScript.Shell).CreateShortcut($Shortcut)
+        if ($link.Arguments -match '"([^"]+)\\pense_bete\.py"') {
+            $installDir = $Matches[1]
+        } elseif ((Split-Path -Leaf $link.TargetPath) -eq $Executable) {
+            $installDir = Split-Path $link.TargetPath
+        }
     }
     # A git working copy is a clone the application was installed in place from: it is
     # the user's own checkout, so only the Start menu entry is removed.
     if ($installDir -and (Test-Path -LiteralPath (Join-Path $installDir ".git"))) {
         Warn (T "{0} is a git repository, it is kept." "{0} est un d\u00e9p\u00f4t git, il est conserv\u00e9." $installDir)
-    } elseif ($installDir -and (Test-Path -LiteralPath (Join-Path $installDir "pense_bete.py"))) {
+    } elseif ($installDir -and ((Test-Path -LiteralPath (Join-Path $installDir "pense_bete.py")) -or
+                                (Test-Path -LiteralPath (Join-Path $installDir $Executable)))) {
         if (AskYes (T "Delete {0}?" "Supprimer {0} ?" $installDir)) {
             Remove-Item -LiteralPath $installDir -Recurse -Force
         }
@@ -166,34 +184,74 @@ function GitHub-Api {  # the GitHub API address of $RepoUrl, "" for a repository
     return ""
 }
 
-# Without git: the newest release through the GitHub API, its archive unpacked into
-# $SourceDir, its tag and commit recorded for the installation.
-function Download-Release {
+# The newest release through the GitHub API: its tag, commit and archives.
+function Newest-Tag([string]$Api) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $tags = @(Invoke-RestMethod -Uri "$Api/tags?per_page=100" -Headers @{ "User-Agent" = "pense-bete" } -UseBasicParsing |
+        ForEach-Object { $_ } | Where-Object { $_.name -match '^v\d+\.\d+\.\d+$' } |
+        Sort-Object { [version]$_.name.Substring(1) })
+    if (-not $tags.Count) { throw "no release" }
+    return $tags[-1]
+}
+
+# A zip archive whose files are all in one top directory, unpacked as $SourceDir.
+function Download-Zip([string]$Url) {
+    $zip = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid()).zip"
+    $unpacked = "$zip.d"
+    try {
+        Invoke-WebRequest -Uri $Url -Headers @{ "User-Agent" = "pense-bete" } -OutFile $zip -UseBasicParsing
+        Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
+        $top = @(Get-ChildItem -LiteralPath $unpacked -Directory)[0].FullName
+        Move-Item -LiteralPath $top -Destination $SourceDir
+    } finally {
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Require-Api {
     $api = GitHub-Api
     if (-not $api) {
         Fail (T "Downloading from {0} needs git." "Le t\u00e9l\u00e9chargement depuis {0} n\u00e9cessite git." $RepoUrl)
     }
+    return $api
+}
+
+# Without git: the newest release's source archive, its tag and commit recorded for the
+# installation.
+function Download-Release {
+    $api = Require-Api
     Info (T "Downloading the newest release of {0} from {1}" "T\u00e9l\u00e9chargement de la derni\u00e8re version de {0} depuis {1}" @($AppName, $RepoUrl))
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    $headers = @{ "User-Agent" = "pense-bete" }
     try {
-        $tags = @(Invoke-RestMethod -Uri "$api/tags?per_page=100" -Headers $headers -UseBasicParsing |
-            ForEach-Object { $_ } | Where-Object { $_.name -match '^v\d+\.\d+\.\d+$' } |
-            Sort-Object { [version]$_.name.Substring(1) })
-        if (-not $tags.Count) { throw "no release" }
-        $tag = $tags[-1]
-        $zip = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid()).zip"
-        $unpacked = "$zip.d"
-        Invoke-WebRequest -Uri $tag.zipball_url -Headers $headers -OutFile $zip -UseBasicParsing
-        Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
-        # GitHub puts the files in one top directory.
-        $top = @(Get-ChildItem -LiteralPath $unpacked -Directory)[0].FullName
-        Move-Item -LiteralPath $top -Destination $SourceDir
+        $tag = Newest-Tag $api
+        Download-Zip $tag.zipball_url
     } catch {
         Fail (T "Could not download the application: {0}" "Impossible de t\u00e9l\u00e9charger l'application : {0}" "$_")
-    } finally {
-        if ($zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
-        if ($unpacked) { Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    $script:Release = $tag.name
+    $script:Commit = $tag.commit.sha
+    Info (T "{0} {1} downloaded" "{0} {1} t\u00e9l\u00e9charg\u00e9" @($AppName, $Release))
+}
+
+# The newest release's standalone build, attached to its GitHub release.
+function Download-Bundle {
+    $api = Require-Api
+    Info (T "Downloading the standalone version of {0} from {1}" "T\u00e9l\u00e9chargement de la version autonome de {0} depuis {1}" @($AppName, $RepoUrl))
+    try {
+        $tag = Newest-Tag $api
+        $release = Invoke-RestMethod -Uri "$api/releases/tags/$($tag.name)" -Headers @{ "User-Agent" = "pense-bete" } -UseBasicParsing
+        $asset = @($release.assets | Where-Object { $_.name -eq $BundleAsset })[0]
+    } catch {
+        $asset = $null
+    }
+    # The build runs for a few minutes after a release is tagged.
+    if (-not $asset) {
+        Fail (T "The standalone version of {0} is not available yet: try again in a few minutes, or install Python." "La version autonome de {0} n'est pas encore disponible : r\u00e9essayez dans quelques minutes, ou installez Python." $tag.name)
+    }
+    try {
+        Download-Zip $asset.browser_download_url
+    } catch {
+        Fail (T "Could not download the application: {0}" "Impossible de t\u00e9l\u00e9charger l'application : {0}" "$_")
     }
     $script:Release = $tag.name
     $script:Commit = $tag.commit.sha
@@ -201,14 +259,26 @@ function Download-Release {
 }
 
 function Check-Dependencies {
-    $script:Python = Find-Python
-    if (-not $Python) {
-        Fail (T "Python 3 not found. Install it from https://www.python.org/downloads/ then run this again." "Python 3 est introuvable. Installez-le depuis https://www.python.org/downloads/ puis relancez.")
-    }
     # Only a warning: without git, notes are saved without history.
     $script:HasGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
     if (-not $HasGit) {
         Warn (T "git is not installed: notes will be saved without history. Install it to keep it: https://git-scm.com/download/win" "git n'est pas install\u00e9 : les post-its seront sauvegard\u00e9s sans historique. Installez-le pour le garder : https://git-scm.com/download/win")
+    }
+    # A standalone build to install, as the application's own update hands over.
+    if ($SourceDir -and (Test-Path -LiteralPath (Join-Path $SourceDir $Executable))) {
+        $script:Bundle = $true
+        return
+    }
+    $script:Python = Find-Python
+    if (-not $SourceDir -and ($Standalone -or (-not $Python -and (AskYes (T "Python is not installed. Install the standalone version, which carries it (about 40 MB)?" "Python n'est pas install\u00e9. Installer la version autonome, qui l'inclut (environ 40 Mo) ?"))))) {
+        $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
+        $script:Cleanup = $SourceDir
+        Download-Bundle
+        $script:Bundle = $true
+        return
+    }
+    if (-not $Python) {
+        Fail (T "Python 3 not found. Install it from https://www.python.org/downloads/ then run this again." "Python 3 est introuvable. Installez-le depuis https://www.python.org/downloads/ puis relancez.")
     }
 
     if (-not $SourceDir -and -not $HasGit) {
@@ -293,15 +363,22 @@ public static class PenseBeteShortcut {
 }
 "@
 
-function Write-Shortcut([string]$InstallDir) {
-    # pythonw runs the application without a console window.
+# What starts the installed application: its executable, or pythonw, which runs it
+# without a console window, on its script.
+function Launcher([string]$InstallDir) {
+    if ($Bundle) { return @("$InstallDir\$Executable", "") }
     $pythonw = Join-Path (Split-Path $Python) "pythonw.exe"
     if (-not (Test-Path -LiteralPath $pythonw)) { $pythonw = $Python }
+    return @($pythonw, "`"$InstallDir\pense_bete.py`"")
+}
+
+function Write-Shortcut([string]$InstallDir) {
+    $launcher = Launcher $InstallDir
     $icon = if ($Dev) { "icon-dev.ico" } else { "icon.ico" }
     New-Item -ItemType Directory -Force -Path (Split-Path $Shortcut) | Out-Null
     $link = (New-Object -ComObject WScript.Shell).CreateShortcut($Shortcut)
-    $link.TargetPath = $pythonw
-    $link.Arguments = "`"$InstallDir\pense_bete.py`""
+    $link.TargetPath = $launcher[0]
+    $link.Arguments = $launcher[1]
     $link.WorkingDirectory = $HOME
     $link.IconLocation = "$InstallDir\$icon,0"
     $link.Description = T "Sticky notes versioned with git" "Post-its versionn\u00e9s avec git"
@@ -331,21 +408,30 @@ function Do-Install {
     $installDir = (Resolve-Path -LiteralPath $installDir).Path
 
     if ($installDir -ne (Resolve-Path -LiteralPath $SourceDir).Path) {
-        if ((Get-ChildItem -LiteralPath $installDir -Force) -and
-                -not (Test-Path -LiteralPath (Join-Path $installDir "pense_bete.py"))) {
+        $installed = (Test-Path -LiteralPath (Join-Path $installDir "pense_bete.py")) -or
+                     (Test-Path -LiteralPath (Join-Path $installDir $Executable))
+        if ((Get-ChildItem -LiteralPath $installDir -Force) -and -not $installed) {
             if (-not (AskYes (T "{0} is not empty, install anyway?" "{0} n'est pas vide, installer quand m\u00eame ?" $installDir))) {
                 Fail (T "Installation cancelled." "Installation annul\u00e9e.")
             }
         }
         Info (T "Copying files to {0}" "Copie des fichiers dans {0}" $installDir)
-        foreach ($file in $Files) {
-            Copy-Item -LiteralPath (Join-Path $SourceDir $file) -Destination $installDir -Force
+        # What an earlier installation put there goes first, of either kind, so that
+        # nothing of an earlier version is left behind, nor of the other kind.
+        foreach ($item in @($Files + @($Package, $Executable, "_internal", "icon-dev.ico"))) {
+            $path = Join-Path $installDir $item
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
         }
-        # Replaced as a whole, so that no module of an earlier version is left behind.
-        $packageDir = Join-Path $installDir $Package
-        if (Test-Path -LiteralPath $packageDir) { Remove-Item -LiteralPath $packageDir -Recurse -Force }
-        New-Item -ItemType Directory -Path $packageDir | Out-Null
-        Copy-Item -Path (Join-Path $SourceDir "$Package\*.py") -Destination $packageDir
+        if ($Bundle) {
+            Copy-Item -Path (Join-Path $SourceDir "*") -Destination $installDir -Recurse -Force
+        } else {
+            foreach ($file in $Files) {
+                Copy-Item -LiteralPath (Join-Path $SourceDir $file) -Destination $installDir -Force
+            }
+            $packageDir = Join-Path $installDir $Package
+            New-Item -ItemType Directory -Path $packageDir | Out-Null
+            Copy-Item -Path (Join-Path $SourceDir "$Package\*.py") -Destination $packageDir
+        }
     }
     # The installed commit, which the application compares with the repository to offer
     # updates, and the release it is, when the commit is one, for the About window; given
@@ -370,6 +456,12 @@ function Do-Install {
     Info (T "Adding the entry to the Start menu" "Ajout de l'entr\u00e9e dans le menu D\u00e9marrer")
     Write-Shortcut $installDir
 
+    if ($Launch) {
+        $launcher = Launcher $installDir
+        $start = @{ FilePath = $launcher[0]; WorkingDirectory = $HOME }
+        if ($launcher[1]) { $start.ArgumentList = $launcher[1] }  # none for the executable
+        Start-Process @start
+    }
     Info (T "{0} is installed in {1}" "{0} est install\u00e9 dans {1}" @($AppName, $installDir))
     Write-Host (T '    Launch it from the Start menu (search for "{0}")' "    Lancez-le depuis le menu D\u00e9marrer (cherchez \u00ab {0} \u00bb)" $AppName)
     $uninstall = "$installDir\install.ps1 -Uninstall$(if ($Dev) { ' -Dev' })"
@@ -379,6 +471,11 @@ function Do-Install {
 $Cleanup = ""
 $HasGit = $false
 try {
+    # The application hands over and quits: its files can be replaced, or removed, once
+    # it has, which Windows forbids while it runs.
+    if ($WaitPid) { Wait-Process -Id $WaitPid -Timeout 120 -ErrorAction SilentlyContinue }
+    # A download the application unpacked for this installer, which it cannot remove.
+    if ($RemoveSource -and $SourceDir) { $Cleanup = $SourceDir }
     if ($Uninstall) { Do-Uninstall } else { Do-Install }
 } finally {
     if ($Cleanup) { Remove-Item -LiteralPath $Cleanup -Recurse -Force -ErrorAction SilentlyContinue }

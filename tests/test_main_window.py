@@ -1,5 +1,8 @@
-from PySide6.QtCore import Qt
+import os
 from datetime import datetime, timedelta
+
+import pytest
+from PySide6.QtCore import Qt
 
 from pensebete.main_window import MainWindow
 from pensebete.session import Session
@@ -341,3 +344,67 @@ def test_without_git_the_history_is_off_and_cannot_be_turned_on(qtbot, tmp_path,
     window.quitting = True
     for note_window in list(window.windows.values()):
         note_window.discard()
+
+
+@pytest.fixture
+def frozen(monkeypatch, tmp_path):
+    """The standalone build: updates are staged and handed over, never run in place."""
+    from PySide6.QtWidgets import QMessageBox
+    from pensebete import main_window as module
+    from pensebete import updates
+    from pensebete.updates import Release
+    handed_over = []
+    monkeypatch.setattr(updates, "WINDOWS", True)  # the standalone build is Windows'
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: QMessageBox.Yes)
+    staged = tmp_path / "staged" / "Pense-bete"
+    staged.mkdir(parents=True)
+    monkeypatch.setattr(module, "FROZEN", True)
+    monkeypatch.setattr(module, "can_update", lambda: True)  # no clone to protect
+    monkeypatch.setattr(module, "update_available", lambda *a: Release("v2.0.0", "abc", ""))
+    monkeypatch.setattr(module, "release_notes", lambda *a: "Notes")
+    monkeypatch.setattr(module, "stage_update", lambda release, *a: staged)
+    monkeypatch.setattr(module, "hand_over", handed_over.append)
+    monkeypatch.setattr(module, "install_release",
+                        lambda *a: pytest.fail("the running build was overwritten"))
+    return handed_over, staged
+
+
+def test_the_standalone_build_updates_through_its_installer_then_quits(main_window, frozen):
+    handed_over, staged = frozen
+    main_window.create_note()
+    note_window = next(iter(main_window.windows.values()))
+    note_window.content_edit.setPlainText("saved before the update")
+
+    main_window.update_app()
+
+    [command] = handed_over
+    assert str(staged / "install.ps1") in command
+    assert "-Launch" in command and command[command.index("-Waitpid") + 1] == str(os.getpid())
+    assert main_window.quitting
+    assert main_window.store.load_all()[0].content == "saved before the update"
+
+
+def test_a_standalone_update_declined_at_once_goes_in_at_quitting(main_window, frozen,
+                                                                 monkeypatch):
+    handed_over, staged = frozen
+    from PySide6.QtWidgets import QMessageBox
+    from pensebete.updates import Release
+    main_window.staged_update = (staged, Release("v2.0.0", "abc", ""))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: QMessageBox.No)  # restart later
+
+    main_window._on_auto_updated("v2.0.0", "Notes")
+    assert handed_over == []
+
+    main_window.quit_app()
+    [command] = handed_over
+    assert "-Launch" not in command and "-Waitpid" in command
+
+
+def test_the_standalone_build_is_uninstalled_once_it_has_quit(main_window, frozen):
+    handed_over, _ = frozen
+
+    main_window.uninstall_app()
+
+    [command] = handed_over
+    assert "-Uninstall" in command and command[command.index("-Waitpid") + 1] == str(os.getpid())
+    assert main_window.quitting

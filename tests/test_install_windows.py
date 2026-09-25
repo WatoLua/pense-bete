@@ -176,3 +176,98 @@ def test_without_git_the_standalone_installer_downloads_the_newest_release(
     assert (target / ".version").read_text().strip() == commit
     assert (target / ".release").read_text().strip() == "v1.10.0"
     assert shortcut(profile).exists()
+
+
+@pytest.fixture
+def bundle(tmp_path):
+    """A standalone build unpacked, as an update hands it over to its installer."""
+    from conftest import fake_bundle_files
+    directory = tmp_path / "staged" / "Pense-bete"
+    for name, data in fake_bundle_files().items():
+        (directory / name).parent.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_bytes(data)
+    return directory
+
+
+def run_ps1(profile, script, *args, path=None, api=None):
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PENSE_BETE_")}
+    env.update({key: str(value) for key, value in profile.items()})
+    if path is not None:
+        env["PATH"] = path
+    if api is not None:
+        env["PENSE_BETE_API"] = api
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                             "Bypass", "-File", str(script), "-Yes", *args],
+                            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result
+
+
+def test_a_standalone_build_is_installed_with_a_shortcut_to_its_executable(profile, tmp_path,
+                                                                            bundle):
+    target = tmp_path / "app"
+
+    run_ps1(profile, bundle / "install.ps1", "-Target", str(target),
+            "-Commit", "abc", "-Release", "v1.2.3")
+
+    assert (target / "Pense-bete.exe").is_file()
+    assert (target / "_internal" / "python312.dll").is_file()
+    assert (target / ".release").read_text().strip() == "v1.2.3"
+    link = read_shortcut(shortcut(profile))
+    assert link["target"] == str(target / "Pense-bete.exe")
+    assert link["arguments"] == ""
+    assert link["app_id"] == "pense-bete"
+
+
+def test_a_standalone_build_replaces_an_installation_with_python(profile, tmp_path, bundle):
+    target = tmp_path / "app"
+    install_ps1(profile, "-Target", str(target))
+    assert (target / "pense_bete.py").exists()
+
+    run_ps1(profile, bundle / "install.ps1", "-Target", str(target))
+
+    assert not (target / "pense_bete.py").exists() and not (target / "pensebete").exists()
+    assert (target / "Pense-bete.exe").is_file()
+
+
+def test_an_update_waits_for_the_application_then_cleans_up_and_relaunches(profile, tmp_path,
+                                                                           bundle):
+    import sys
+    import time
+    target = tmp_path / "app"
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(4)"])
+    started = time.monotonic()
+
+    run_ps1(profile, bundle / "install.ps1", "-Target", str(target),
+            "-WaitPid", str(running.pid), "-Launch", "-RemoveSource")
+
+    assert time.monotonic() - started >= 3  # it waited for the process to end
+    assert running.poll() is not None
+    assert (target / "Pense-bete.exe").is_file()
+    assert not bundle.exists()  # the unpacked download is gone
+
+
+def test_standalone_downloads_the_build_of_the_newest_release(profile, tmp_path, fake_github):
+    api, commit = fake_github
+    alone = tmp_path / "script"  # install.ps1 on its own: nothing to install beside it
+    alone.mkdir()
+    (alone / "install.ps1").write_bytes((REPO_DIR / "install.ps1").read_bytes())
+    target = tmp_path / "app"
+
+    result = run_ps1(profile, alone / "install.ps1", "-Standalone", "-Target", str(target),
+                     api=api)
+
+    assert "v1.10.0" in result.stdout
+    assert (target / "Pense-bete.exe").is_file()
+    assert (target / ".version").read_text().strip() == commit
+    assert read_shortcut(shortcut(profile))["target"] == str(target / "Pense-bete.exe")
+
+
+def test_a_standalone_installation_is_uninstalled(profile, tmp_path, bundle):
+    target = tmp_path / "app"
+    run_ps1(profile, bundle / "install.ps1", "-Target", str(target))
+
+    run_ps1(profile, target / "install.ps1", "-Uninstall")
+
+    assert not target.exists()
+    assert not shortcut(profile).exists()
