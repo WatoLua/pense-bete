@@ -32,6 +32,46 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path, onerror=make_writable_and_retry)
 
 
+def note_dirs(path: Path) -> list[Path]:
+    """The note directories in a directory: those holding a note file."""
+    if not path.is_dir():
+        return []
+    return sorted(child for child in path.iterdir() if (child / NOTE_FILE).is_file())
+
+
+def move_notes(source: Path, target: Path) -> None:
+    """Move every note directory, history included, from one directory to another.
+
+    Everything is copied before anything is deleted, so that a failure halfway leaves
+    the notes where they were, the copies made removed. Other files in the source stay;
+    the source goes if that leaves it empty.
+    """
+    source, target = source.resolve(), target.resolve()
+    if target == source or target.is_relative_to(source):
+        raise OSError(tr("move_inside", path=source))
+    notes = note_dirs(source)
+    taken = [note.name for note in notes if (target / note.name).exists()]
+    if taken:
+        raise FileExistsError(tr("move_taken", path=target / taken[0]))
+    target.mkdir(parents=True, exist_ok=True)
+    copied = []
+    try:
+        for note in notes:
+            copied.append(target / note.name)  # before, so a copy cut short goes too
+            shutil.copytree(note, target / note.name, symlinks=True)
+    except (OSError, shutil.Error):
+        for copy in copied:
+            if copy.exists():
+                remove_tree(copy)
+        raise
+    for note in notes:
+        remove_tree(note)
+    try:
+        source.rmdir()
+    except OSError:
+        pass  # other files are in it
+
+
 class GitRepo:
     """Thin wrapper around the git CLI for one repository."""
 

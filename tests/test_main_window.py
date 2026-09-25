@@ -1,9 +1,11 @@
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
 
+from conftest import REPO_DIR
 from pensebete.main_window import MainWindow
 from pensebete.session import Session
 from pensebete.storage import Note, NoteStore
@@ -408,3 +410,85 @@ def test_the_standalone_build_is_uninstalled_once_it_has_quit(main_window, froze
     [command] = handed_over
     assert "-Uninstall" in command and command[command.index("-Waitpid") + 1] == str(os.getpid())
     assert main_window.quitting
+
+
+@pytest.fixture
+def choose_folder(monkeypatch, main_window):
+    """The folder dialog answers with the given path; restarting is only recorded."""
+    from PySide6.QtWidgets import QFileDialog
+    chosen, restarts = [], []
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        staticmethod(lambda *a, **k: str(chosen[-1])))
+    monkeypatch.setattr(main_window, "restart", lambda: restarts.append(True))
+    return chosen, restarts
+
+
+def test_the_notes_move_to_the_folder_chosen_and_the_application_restarts(
+        main_window, store, session, choose_folder, tmp_path):
+    chosen, restarts = choose_folder
+    main_window.create_note()
+    window = next(iter(main_window.windows.values()))
+    window.content_edit.setPlainText("typed just before")
+    note_id = window.note.id
+    target = tmp_path / "Documents" / "notes"
+    chosen.append(target)
+
+    main_window.change_data_dir()
+
+    assert restarts == [True]
+    assert [note.content for note in NoteStore(target).load_all()] == ["typed just before"]
+    assert not (store.path / note_id).exists()
+    assert Session(session.path).get("data_dir", None) == str(target.resolve())
+    assert Session(session.path).get("open_notes", []) == [note_id]  # reopened after
+
+
+def test_moving_back_to_the_default_folder_forgets_the_choice(
+        main_window, store, session, choose_folder, monkeypatch):
+    from pensebete import main_window as module
+    chosen, restarts = choose_folder
+    session.set("data_dir", str(store.path))
+    default = store.path.parent / "default"
+    monkeypatch.setattr(module, "DEFAULT_DATA_DIR", default)
+    chosen.append(default)
+
+    main_window.change_data_dir()
+
+    assert restarts == [True]
+    assert "data_dir" not in Session(session.path).data
+
+
+def test_a_failed_move_changes_nothing(main_window, store, session, choose_folder,
+                                       answer_yes):
+    chosen, restarts = choose_folder
+    main_window.create_note()
+    chosen.append(store.path / "inside")
+
+    main_window.change_data_dir()
+
+    assert restarts == [] and answer_yes  # told why
+    assert "data_dir" not in session.data
+    assert len(store.load_all()) == 1
+
+
+def test_the_folder_chosen_is_used_at_start_unless_it_is_gone(tmp_path):
+    import json
+    import subprocess
+    import sys
+    env = {key: value for key, value in os.environ.items() if key != "PENSE_BETE_DIR"}
+    env.update(XDG_CONFIG_HOME=str(tmp_path / "config"), APPDATA=str(tmp_path / "config"))
+    script = ("from pensebete import config; print(config.SESSION_FILE); "
+              "print(config.DEFAULT_DATA_DIR); print(config.DATA_DIR); "
+              "print(config.DATA_DIR_UNAVAILABLE)")
+
+    def started():
+        return subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
+                              text=True, check=True, cwd=REPO_DIR).stdout.splitlines()
+
+    session_file, default, _, _ = started()
+    chosen = tmp_path / "chosen é"
+    Path(session_file).parent.mkdir(parents=True)
+    Path(session_file).write_text(json.dumps({"data_dir": str(chosen)}), encoding="utf-8")
+
+    assert started()[2:] == [default, str(chosen)]  # gone: the default, and a warning
+    chosen.mkdir()
+    assert started()[2:] == [str(chosen), "None"]

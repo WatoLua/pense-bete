@@ -59,6 +59,15 @@ $RunKey = "HKCU:\" + $(if ($env:PENSE_BETE_RUN_KEY) { $env:PENSE_BETE_RUN_KEY } 
 # Where the application keeps its data, as pensebete/config.py computes it.
 $AppData = Join-Path $env:APPDATA $AppId
 $DataDir = if ($env:PENSE_BETE_DIR) { $env:PENSE_BETE_DIR } else { Join-Path $AppData "notes" }
+# The notes' directory chosen in the application, which its session records; read as
+# UTF-8, which Get-Content does not assume in Windows PowerShell.
+$SessionFile = Join-Path $AppData "session.json"
+if (-not $env:PENSE_BETE_DIR -and (Test-Path -LiteralPath $SessionFile)) {
+    try {
+        $chosenDir = ([IO.File]::ReadAllText($SessionFile) | ConvertFrom-Json).data_dir
+        if ($chosenDir) { $DataDir = $chosenDir }
+    } catch { }
+}
 $Files = "pense_bete.py", "icon.svg", "icon.ico", "requirements.txt", "install.ps1", "install.sh", "LICENSE"
 $Package = "pensebete"
 # The standalone version: an executable carrying Python and PySide6, built for every

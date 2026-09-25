@@ -13,7 +13,8 @@ class Session:
     Keys: "background" (bool), "main_open" (bool), "open_notes", "recent" and "on_top"
     (note ids, most recent first for "recent"), "geometries" (window key -> base64),
     "font_sizes" (note id -> pixels, for the zoomed notes only), "sort" (the list's order),
-    "markdown", "versioning", "retention_days" and "auto_update".
+    "markdown", "versioning", "retention_days", "auto_update", "shortcuts", and "data_dir"
+    (the notes' directory, when not the default), which config.py reads at start.
     """
 
     def __init__(self, path: Path):

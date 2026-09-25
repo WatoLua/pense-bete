@@ -50,6 +50,12 @@ BIN_LINK="$HOME/.local/bin/$APP_ID"
 # Where the application keeps its data, as pense_bete.py computes it.
 DATA_DIR="${PENSE_BETE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
+# The notes' directory chosen in the application, which its session records.
+SESSION_FILE="$CONFIG_DIR/session.json"
+if [[ -z "${PENSE_BETE_DIR:-}" && -f "$SESSION_FILE" ]] && command -v python3 >/dev/null; then
+    chosen_dir="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("data_dir") or "")' "$SESSION_FILE" 2>/dev/null || true)"
+    [[ -n "$chosen_dir" ]] && DATA_DIR="$chosen_dir"
+fi
 # Written by the application when it starts with the session.
 AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$APP_ID.desktop"
 FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh LICENSE)

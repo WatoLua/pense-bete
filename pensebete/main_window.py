@@ -1,6 +1,7 @@
 """The list of notes, which opens their windows and holds the application's menus."""
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -33,15 +34,14 @@ from . import autostart
 from .about import AboutDialog, ShortcutsDialog
 from .archive import ArchiveError, export_notes, import_notes
 from .config import (
-    APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, FROZEN,
-    ICON_PATH,
-    RECENT_NOTES,
+    APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_DATA_DIR, DEFAULT_FONT_SIZE,
+    DEFAULT_RETENTION_DAYS, DEV_MODE, FROZEN, ICON_PATH, RECENT_NOTES,
 )
 from .i18n import tr
 from .note_window import NoteWindow
 from .session import Session
 from .shortcuts import Binding, first_key, settings
-from .storage import Note, NoteStore, Version
+from .storage import Note, NoteStore, Version, move_notes, note_dirs
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
 from .updates import (
@@ -144,6 +144,11 @@ class MainWindow(QWidget):
             sort_group.addAction(action)
         options_menu.addSeparator()
         options_menu.addAction(tr("deleted_notes"), self.open_trash)
+        data_dir_action = options_menu.addAction(tr("data_dir_menu"), self.change_data_dir)
+        if os.environ.get("PENSE_BETE_DIR"):  # which the choice would not override
+            data_dir_action.setEnabled(False)
+            data_dir_action.setToolTip(tr("data_dir_from_env"))
+            options_menu.setToolTipsVisible(True)
         options_menu.addAction(tr("export"), self.export_archive)
         options_menu.addAction(tr("import"), self.import_archive)
         options_menu.addSeparator()
@@ -460,6 +465,39 @@ class MainWindow(QWidget):
     def open_trash(self) -> None:
         self.erase_expired()
         TrashDialog(self).exec()
+
+    def change_data_dir(self) -> None:
+        """Move the notes, history and deleted notes included, to a directory the user
+        chooses, then restart there: the open windows come back as they were."""
+        current = self.store.path.resolve()
+        chosen = QFileDialog.getExistingDirectory(self, tr("data_dir_choose"), str(current))
+        if not chosen:
+            return
+        target = Path(chosen).resolve()
+        if target == current:
+            return
+        count = len(note_dirs(current))
+        if QMessageBox.question(self, tr("data_dir_menu"), tr(
+                "data_dir_confirm", count=count, source=current, target=target)) \
+                != QMessageBox.Yes:
+            return
+        self.save_session()
+        self.save_all()
+        try:
+            move_notes(current, target)
+        except (OSError, shutil.Error) as error:
+            QMessageBox.warning(self, APP_NAME, tr("data_dir_failed", error=error))
+            return
+        # The default is not recorded, so that it follows the system's own location.
+        if target == DEFAULT_DATA_DIR.resolve():
+            self.session.data.pop("data_dir", None)
+        else:
+            self.session.set("data_dir", str(target))
+        self.session.write()
+        QMessageBox.information(self, APP_NAME, tr("data_dir_moved", path=target))
+        # The windows have nothing left to save: closing them writes nothing where the
+        # notes were.
+        self.restart()
 
     def export_archive(self) -> None:
         default = Path.home() / f"{APP_ID}-{datetime.now():%Y-%m-%d}.zip"

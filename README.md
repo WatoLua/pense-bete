@@ -264,7 +264,14 @@ pointing at a folder with other files loses nothing else.
 - **Notes:** each note is a directory in `~/.local/share/pense-bete/`
   (`%APPDATA%\pense-bete\notes\` on Windows), holding the note as `note.json`
   and its git repository: `git -C ~/.local/share/pense-bete/<id> log` shows its
-  history. Set `PENSE_BETE_DIR` to store the notes elsewhere.
+  history.
+- **Notes' folder…**, in the **⋮** menu, moves them elsewhere — a synced or
+  backed-up folder, say — with their history and the deleted notes, then
+  restarts the application there. Everything is copied before anything is
+  deleted, so a failed move leaves the notes where they were. A folder that has
+  gone missing, on a drive not connected, is reported at launch and the default
+  folder is used meanwhile. `PENSE_BETE_DIR`, when set, takes precedence over
+  the choice. Uninstalling with the notes deletes them from the folder chosen.
 - **Window state:** the open windows, their geometry, the recent notes and the
   options are in `~/.config/pense-bete/session.json`
   (`%APPDATA%\pense-bete\session.json` on Windows), apart from the notes so that

@@ -10,10 +10,12 @@ from pathlib import Path
 from PySide6.QtCore import QLibraryInfo, QLocale, QSocketNotifier, QTranslator
 from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .config import APP_ID, APP_NAME, DATA_DIR, ICON_PATH, SESSION_FILE, WINDOWS
-from .i18n import LANGUAGE
+from .config import (
+    APP_ID, APP_NAME, DATA_DIR, DATA_DIR_UNAVAILABLE, ICON_PATH, SESSION_FILE, WINDOWS,
+)
+from .i18n import LANGUAGE, tr
 from .main_window import MainWindow
 from .session import Session
 from .storage import NoteStore
@@ -92,6 +94,9 @@ def main() -> None:
 
     window = MainWindow(NoteStore(DATA_DIR), Session(SESSION_FILE), server)
     window.restore_session()
+    if DATA_DIR_UNAVAILABLE is not None:
+        QMessageBox.warning(window if window.isVisible() else None, APP_NAME,
+                            tr("data_dir_unavailable", path=DATA_DIR_UNAVAILABLE))
     window.auto_update()
     keep_alive = save_on_shutdown(app, window)  # referenced until exec returns
     sys.exit(app.exec())

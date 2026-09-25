@@ -1,5 +1,6 @@
 """install.sh, run from this repository into a throwaway HOME."""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -122,6 +123,21 @@ def test_uninstall_stops_the_start_with_the_session(home):
 
     assert not (autostart / "pense-bete.desktop").exists()
     assert (autostart / "other.desktop").exists()
+
+
+def test_purge_deletes_the_notes_in_the_folder_chosen(home):
+    install_sh(home)
+    chosen = home / "Documents" / "my notes"
+    make_note(chosen)
+    (chosen / "unrelated.txt").write_text("keep me")
+    config_dir = home / ".config" / "pense-bete"
+    config_dir.mkdir(parents=True)
+    (config_dir / "session.json").write_text(json.dumps({"data_dir": str(chosen)}))
+
+    install_sh(home, "--uninstall", "--purge")
+
+    assert not (chosen / "a").exists()
+    assert (chosen / "unrelated.txt").exists()
 
 
 def test_the_development_entry_runs_the_clone_and_uninstalling_keeps_it(home):

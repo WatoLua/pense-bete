@@ -1,5 +1,7 @@
+import pytest
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from conftest import commits
 from pensebete.storage import NOTE_FILE, Note, NoteStore
@@ -163,3 +165,64 @@ def test_versioning_off_keeps_the_existing_history(store):
 
     assert commits(store.path / "a") == ["Create"]
     assert store.load_all()[0].content == "v2"
+
+
+def test_moving_the_notes_takes_their_history_and_leaves_the_rest(store, tmp_path):
+    from pensebete.storage import move_notes, NoteStore
+    note = Note("a", "Title", content="one")
+    store.save(note, "Create")
+    note.content = "two"
+    store.save(note, "Update")
+    (store.path / "unrelated.txt").write_text("mine")
+    target = tmp_path / "elsewhere" / "notes"
+
+    move_notes(store.path, target)
+
+    moved = NoteStore(target)
+    assert [n.content for n in moved.load_all()] == ["two"]
+    assert len(moved.history(moved.load_all()[0])) == 2
+    assert not (store.path / "a").exists()
+    assert (store.path / "unrelated.txt").read_text() == "mine"
+
+
+def test_the_emptied_folder_goes(store, tmp_path):
+    from pensebete.storage import move_notes
+    store.save(Note("a", "Title"), "Create")
+
+    move_notes(store.path, tmp_path / "new")
+
+    assert not store.path.exists()
+
+
+def test_a_move_cut_short_leaves_the_notes_where_they_were(store, tmp_path, monkeypatch):
+    import shutil
+    from pensebete import storage
+    for note_id in ("a", "b"):
+        store.save(Note(note_id, note_id), "Create")
+    copy = shutil.copytree
+
+    def fail_on_the_second(source, target, *args, **options):
+        if Path(source).name == "b":  # copytree calls itself for the directories inside
+            copy(Path(source) / ".git", Path(target) / ".git")  # partly copied
+            raise OSError("disk full")
+        return copy(source, target, *args, **options)
+    monkeypatch.setattr(storage.shutil, "copytree", fail_on_the_second)
+    target = tmp_path / "new"
+
+    with pytest.raises(OSError, match="disk full"):
+        storage.move_notes(store.path, target)
+
+    assert sorted(n.id for n in store.load_all()) == ["a", "b"]
+    assert list(target.iterdir()) == []
+
+
+def test_a_move_into_the_folder_itself_or_onto_a_note_is_refused(store, tmp_path):
+    from pensebete.storage import move_notes
+    store.save(Note("a", "Title"), "Create")
+    (tmp_path / "taken" / "a").mkdir(parents=True)
+
+    with pytest.raises(OSError):
+        move_notes(store.path, store.path / "inside")
+    with pytest.raises(FileExistsError):
+        move_notes(store.path, tmp_path / "taken")
+    assert (store.path / "a" / "note.json").exists()

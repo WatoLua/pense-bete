@@ -1,5 +1,6 @@
 """Where the application lives and keeps its data, and the constants it runs with."""
 
+import json
 import os
 import subprocess
 import sys
@@ -25,16 +26,35 @@ APP_NAME = "Pense-bête (dev)" if DEV_MODE else "Pense-bête"
 # installers compute the same paths, to delete them on request.
 if WINDOWS:
     _APP_DATA = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / APP_ID
-    DATA_DIR = Path(os.environ.get("PENSE_BETE_DIR") or _APP_DATA / "notes")
+    DEFAULT_DATA_DIR = _APP_DATA / "notes"
     SESSION_FILE = _APP_DATA / "session.json"
 else:
-    DATA_DIR = Path(
-        os.environ.get("PENSE_BETE_DIR")
-        or Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID
-    )
+    DEFAULT_DATA_DIR = (Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+                        / APP_ID)
     SESSION_FILE = (
         Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_ID / "session.json"
     )
+
+
+def _chosen_data_dir() -> Path | None:
+    """The notes' directory chosen in the application, which the session records."""
+    try:
+        chosen = json.loads(SESSION_FILE.read_text(encoding="utf-8")).get("data_dir")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(chosen) if isinstance(chosen, str) and chosen else None
+
+
+# PENSE_BETE_DIR comes first, then the directory chosen, then the default. A chosen
+# directory that is gone, on a drive not plugged in say, gives way to the default rather
+# than being created again empty; DATA_DIR_UNAVAILABLE names it, for a warning.
+DATA_DIR_UNAVAILABLE: Path | None = None
+if os.environ.get("PENSE_BETE_DIR"):
+    DATA_DIR = Path(os.environ["PENSE_BETE_DIR"])
+else:
+    DATA_DIR = _chosen_data_dir() or DEFAULT_DATA_DIR
+    if DATA_DIR != DEFAULT_DATA_DIR and not DATA_DIR.is_dir():
+        DATA_DIR_UNAVAILABLE, DATA_DIR = DATA_DIR, DEFAULT_DATA_DIR
 # Passed to every command run: on Windows, a command started from a windowless
 # application would otherwise flash a console window. Output is UTF-8 whatever the
 # system's code page, as git writes it.

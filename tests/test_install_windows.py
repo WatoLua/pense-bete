@@ -151,6 +151,23 @@ def test_purge_deletes_only_what_the_application_wrote(profile):
     assert not (app_data / "session.json").exists()
 
 
+def test_purge_deletes_the_notes_in_the_folder_chosen(profile, tmp_path):
+    import json
+    install_ps1(profile)
+    chosen = tmp_path / "Mes documents" / "post-its é"
+    make_note(chosen)
+    (chosen / "unrelated.txt").write_text("keep me")
+    app_data = profile["APPDATA"] / "pense-bete"
+    app_data.mkdir(exist_ok=True)
+    (app_data / "session.json").write_text(json.dumps({"data_dir": str(chosen)},
+                                                      ensure_ascii=False), encoding="utf-8")
+
+    install_ps1(profile, "-Uninstall", "-Purge")
+
+    assert not (chosen / "a").exists()
+    assert (chosen / "unrelated.txt").exists()
+
+
 def test_the_development_entry_runs_the_clone_and_uninstalling_keeps_it(profile):
     install_ps1(profile, "-Dev")
 
