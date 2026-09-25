@@ -128,7 +128,8 @@ an import never overwrites anything.
 
 ## Requirements
 
-- Python 3.10+ — on Windows, from [python.org](https://www.python.org/downloads/)
+- Python 3.10+ — on Windows, from [python.org](https://www.python.org/downloads/),
+  or none with the standalone version
 - git, for the history of the notes — on Windows,
   [Git for Windows](https://git-scm.com/download/win). Without it, everything else
   works: notes are saved without history, and the installer and updates download
@@ -187,6 +188,15 @@ PySide6 with pip if it is missing, downloads the newest release, asks where to
 install it — press Enter to keep the default, `%LOCALAPPDATA%\Programs\pense-bete`
 — and adds **Pense-bête** to the Start menu. Its windows are grouped under that
 entry in the taskbar, where it can be pinned.
+
+Without Python, it offers the **standalone version** instead: `Pense-bete.exe`,
+about 40 MB, with Python and PySide6 inside, nothing else to install. It is built
+for every release and attached to it on GitHub, a few minutes after the release
+is tagged. `-Standalone` asks for it even where Python is installed. The
+standalone version updates and uninstalls from its **⋮** menu as the other does:
+since Windows cannot replace a running program, it closes, its installer puts
+the new files in place and starts it again. The installer's report is in
+`%TEMP%\pense-bete-install.log`.
 
 From a clone of the repository:
 
@@ -283,6 +293,15 @@ A tag made without `-a` works as well, only without notes.
 
 Until the repository has a release, the installer takes the latest commit of the
 default branch, and the application finds no update.
+
+### Windows build
+
+`tools/build_windows.ps1` builds the standalone version with PyInstaller into
+`dist\Pense-bete`, checks it with `Pense-bete.exe --self-test <report>`, which
+starts what a launch starts in throwaway directories, and packs it as
+`dist\pense-bete-windows.zip`. The **Release** workflow runs it for every
+`vX.Y.Z` tag and attaches the archive to the tag's GitHub release; started by
+hand from the Actions tab, it only builds and checks.
 
 ### Tests
 
