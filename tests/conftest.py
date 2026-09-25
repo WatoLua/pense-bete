@@ -28,6 +28,18 @@ os.environ["USERPROFILE"] = str(HOME)
 os.environ["APPDATA"] = str(HOME / "AppData" / "Roaming")
 os.environ["LOCALAPPDATA"] = str(HOME / "AppData" / "Local")
 os.environ["PENSE_BETE_SHORTCUT_DIR"] = str(HOME / "Start Menu")
+# And for the start at login, a registry key of their own rather than the Run key.
+TEST_RUN_KEY = rf"Software\pense-bete-tests-{os.getpid()}"
+os.environ["PENSE_BETE_RUN_KEY"] = TEST_RUN_KEY
+if sys.platform == "win32":
+    import contextlib
+    import winreg
+
+    def _delete_test_run_key():
+        with contextlib.suppress(OSError):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, TEST_RUN_KEY)
+
+    atexit.register(_delete_test_run_key)
 os.environ.pop("PENSE_BETE_DIR", None)
 os.environ.pop("PENSE_BETE_REPO", None)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"

@@ -30,6 +30,8 @@ from .config import (
     APP_NAME, AUTOSAVE_DELAY_MS, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE, PALETTE,
 )
 from .diff import differences, utf16_ranges
+from .find_bar import FindBar
+from .formatting import format as format_text
 from .i18n import tr
 from .markdown import MarkdownEditing, MarkdownHighlighter
 from .shortcuts import Binding, first_key, settings
@@ -38,6 +40,9 @@ from .style import color_icon, note_palette, pin_icon, pixel_font, text_color_fo
 
 
 TASKS_TEMPLATE = "- [ ] "
+# The formatting keys, by the names of their actions, as the context menu lists them.
+FORMATS = ("bold", "italic", "strike", "code", "heading1", "heading2", "heading3", "quote",
+           "bullet")
 TITLE_FONT_SIZE = 14
 
 # Translucent, so that they read on any note color.
@@ -252,6 +257,10 @@ class NoteWindow(QWidget):
         # text that differs from the last one seen is an edit.
         self.last_text = note.content
         self.content_edit.textChanged.connect(self._on_text_changed)
+        self.find_bar = FindBar(self.content_edit)
+        self.find_bar.highlights_changed.connect(self._show_selections)
+        # The differences with the version shown in the history, marked over the text.
+        self.difference_selections: list[QTextEdit.ExtraSelection] = []
 
         self.on_top_button = QToolButton()
         self.on_top_button.setCheckable(True)
@@ -291,6 +300,7 @@ class NoteWindow(QWidget):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.addLayout(header)
         editor_layout.addWidget(self.content_edit)
+        editor_layout.addWidget(self.find_bar)
         # Past on the left, present on the right.
         self.splitter = QSplitter()
         self.splitter.addWidget(self.history)
@@ -312,8 +322,17 @@ class NoteWindow(QWidget):
                 ("close_note", self.close),
                 ("insert_task", self.insert_tasks),
                 ("insert_table", self.insert_table),
-                ("copy_all", self.copy_all)):
+                ("copy_all", self.copy_all),
+                ("find", lambda: self.find_bar.open(replacing=False)),
+                ("replace", lambda: self.find_bar.open(replacing=True)),
+                ("find_next", self.find_bar.find_next),
+                ("find_previous", self.find_bar.find_previous)):
             Binding(self, action_id, callback)
+        # Only while typing in the note: in its title or the find bar, these keys would
+        # change a text out of sight.
+        for kind in FORMATS:
+            Binding(self.content_edit, kind, lambda kind=kind: self.format(kind),
+                    Qt.WidgetShortcut)
         # Ctrl+Delete is a key of the editor itself, which deletes the next word: it is
         # taken before the editor sees it.
         self.content_edit.installEventFilter(self)
@@ -393,6 +412,16 @@ class NoteWindow(QWidget):
                 # Shown in the menu; the editor handles the keys itself.
                 item.setShortcut(first_key(action_id))
         menu.addSeparator()
+        formats = menu.addMenu(tr("format_menu"))
+        for kind in FORMATS:
+            item = formats.addAction(tr(f"sc_{kind}"), lambda kind=kind: self.format(kind))
+            item.setShortcut(first_key(kind))  # shown only: the editor has the keys
+        for label, action_id, action in (
+                ("find_menu", "find", lambda: self.find_bar.open(replacing=False)),
+                ("replace_menu", "replace", lambda: self.find_bar.open(replacing=True))):
+            item = menu.addAction(tr(label), action)
+            item.setShortcut(first_key(action_id))
+        menu.addSeparator()
         for label, action_id, action in (
                 ("insert_tasks", "insert_task", self.insert_tasks),
                 ("insert_table", "insert_table", self.insert_table),
@@ -418,6 +447,11 @@ class NoteWindow(QWidget):
         cursor.setPosition(start)
         cursor.setPosition(start + len(name), QTextCursor.KeepAnchor)
         self.content_edit.setTextCursor(cursor)
+
+    def format(self, kind: str) -> None:
+        """Toggle a Markdown format on the selection, or at the cursor."""
+        format_text(self.content_edit, kind)
+        self.content_edit.setFocus()
 
     def copy_all(self) -> None:
         QApplication.clipboard().setText(self.content_edit.toPlainText())
@@ -583,7 +617,8 @@ class NoteWindow(QWidget):
                 width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
             self.history.hide()
             self.differences_timer.stop()
-            self.content_edit.setExtraSelections([])
+            self.difference_selections = []
+            self._show_selections()
             self.geometry_before_history = None
             if not self.isMaximized():
                 # The window's minimum width counts the panel until the layout is redone.
@@ -618,8 +653,13 @@ class NoteWindow(QWidget):
         self.history.content.setExtraSelections(
             highlights(self.history.content, version.content if version else "", removed,
                        REMOVED_COLOR))
-        self.content_edit.setExtraSelections(
-            highlights(self.content_edit, current, added, ADDED_COLOR))
+        self.difference_selections = highlights(self.content_edit, current, added, ADDED_COLOR)
+        self._show_selections()
+
+    def _show_selections(self) -> None:
+        """Mark the differences with the history and the matches of the find bar."""
+        self.content_edit.setExtraSelections(self.difference_selections
+                                             + self.find_bar.selections())
 
     def _load_history(self) -> None:
         try:

@@ -393,3 +393,72 @@ def test_every_widget_of_a_note_reads_on_its_paper_in_a_dark_theme(qtbot, store,
             assert palette.color(QPalette.Button).lightness() > 128, widget
     finally:
         QApplication.setPalette(saved)
+
+
+def test_ctrl_f_finds_in_the_note_and_marks_every_match(qtbot, focused):
+    focused.content_edit.setPlainText("one two one ONE")
+    qtbot.keyClick(focused.content_edit, Qt.Key_F, Qt.ControlModifier)
+    bar = focused.find_bar
+    assert bar.isVisible() and not bar.replace_edit.isVisible()
+
+    qtbot.keyClicks(bar.find_edit, "one")
+
+    assert bar.matches == [(0, 3), (8, 11), (12, 15)]  # the case aside
+    assert bar.count.text() == "1/3"
+    assert len(focused.content_edit.extraSelections()) == 3
+    qtbot.keyClick(bar.find_edit, Qt.Key_Return)
+    assert focused.content_edit.textCursor().selectionStart() == 8
+    qtbot.keyClick(bar.find_edit, Qt.Key_Return, Qt.ShiftModifier)
+    assert focused.content_edit.textCursor().selectionStart() == 0
+    qtbot.keyClick(bar.find_edit, Qt.Key_Return, Qt.ShiftModifier)  # around the start
+    assert focused.content_edit.textCursor().selectionStart() == 12
+
+    bar.case_button.setChecked(True)
+    assert bar.matches == [(0, 3), (8, 11)]
+
+    qtbot.keyClick(bar.find_edit, Qt.Key_Escape)
+    assert not bar.isVisible()
+    assert focused.content_edit.extraSelections() == []
+
+
+def test_ctrl_h_replaces_one_match_then_all_as_one_step(qtbot, focused):
+    focused.content_edit.setPlainText("cat, cat and cat")
+    qtbot.keyClick(focused.content_edit, Qt.Key_H, Qt.ControlModifier)
+    bar = focused.find_bar
+    assert bar.replace_edit.isVisible()
+    qtbot.keyClicks(bar.find_edit, "cat")
+    bar.replace_edit.setText("dog")
+
+    bar.replace()
+    assert focused.content_edit.toPlainText() == "dog, cat and cat"
+    assert focused.content_edit.textCursor().selectedText() == "cat"  # the next one
+
+    bar.replace_all()
+    assert focused.content_edit.toPlainText() == "dog, dog and dog"
+    assert bar.count.text() == "2 replaced"
+
+    focused.markdown_editing.undo()
+    assert focused.content_edit.toPlainText() == "dog, cat and cat"
+
+
+def test_the_selected_word_is_what_the_bar_looks_for(qtbot, focused):
+    focused.content_edit.setPlainText("alpha beta")
+    cursor = focused.content_edit.textCursor()
+    cursor.setPosition(6)
+    cursor.setPosition(10, cursor.MoveMode.KeepAnchor)
+    focused.content_edit.setTextCursor(cursor)
+
+    focused.find_bar.open(replacing=False)
+
+    assert focused.find_bar.find_edit.text() == "beta"
+    assert focused.find_bar.count.text() == "1/1"
+
+
+def test_the_matches_follow_the_typing(qtbot, focused):
+    focused.find_bar.open(replacing=False)
+    qtbot.keyClicks(focused.find_bar.find_edit, "x")
+    assert focused.find_bar.count.text() == "No match"
+
+    focused.content_edit.setPlainText("x x")
+
+    qtbot.waitUntil(lambda: len(focused.find_bar.matches) == 2, timeout=2000)

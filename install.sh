@@ -50,6 +50,8 @@ BIN_LINK="$HOME/.local/bin/$APP_ID"
 # Where the application keeps its data, as pense_bete.py computes it.
 DATA_DIR="${PENSE_BETE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
+# Written by the application when it starts with the session.
+AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$APP_ID.desktop"
 FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh LICENSE)
 PACKAGE=pensebete
 
@@ -121,7 +123,7 @@ uninstall() {
             rm -rf -- "$install_dir"
         fi
     fi
-    rm -f -- "$DESKTOP_FILE"
+    rm -f -- "$DESKTOP_FILE" "$AUTOSTART_FILE"
     [[ -L "$BIN_LINK" ]] && rm -f -- "$BIN_LINK"
     command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" || true
     if [[ -n "$purge" ]]; then

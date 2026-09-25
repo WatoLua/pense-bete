@@ -111,6 +111,19 @@ def test_purge_deletes_only_what_the_application_wrote(home):
     assert not config_dir.exists()
 
 
+def test_uninstall_stops_the_start_with_the_session(home):
+    install_sh(home)
+    autostart = home / ".config" / "autostart"
+    autostart.mkdir(parents=True)
+    (autostart / "pense-bete.desktop").write_text("[Desktop Entry]\n")
+    (autostart / "other.desktop").write_text("[Desktop Entry]\n")
+
+    install_sh(home, "--uninstall")
+
+    assert not (autostart / "pense-bete.desktop").exists()
+    assert (autostart / "other.desktop").exists()
+
+
 def test_the_development_entry_runs_the_clone_and_uninstalling_keeps_it(home):
     install_sh(home, "--dev")
 

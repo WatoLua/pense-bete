@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import autostart
 from .about import AboutDialog, ShortcutsDialog
 from .archive import ArchiveError, export_notes, import_notes
 from .config import (
@@ -109,6 +110,16 @@ class MainWindow(QWidget):
         self.background_action.setCheckable(True)
         self.background_action.setChecked(session.get("background", False))
         self.background_action.toggled.connect(self._set_background)
+        self.autostart_action = options_menu.addAction(tr("autostart"))
+        self.autostart_action.setCheckable(True)
+        self.autostart_action.setChecked(autostart.enabled())
+        self.autostart_action.toggled.connect(self._set_autostart)
+        if self.autostart_action.isChecked():
+            # Rewritten at each launch, so that it follows the application if it moved.
+            try:
+                autostart.enable()
+            except OSError as error:
+                print(f"Could not update the start at login: {error}", file=sys.stderr)
         self.markdown_action = options_menu.addAction(tr("markdown"))
         self.markdown_action.setCheckable(True)
         self.markdown_action.setChecked(session.get("markdown", False))
@@ -280,6 +291,15 @@ class MainWindow(QWidget):
         # Only recorded: the check runs at the next launch.
         self.session.set("auto_update", enabled)
         self.session.write()
+
+    def _set_autostart(self, enabled: bool) -> None:
+        try:
+            autostart.enable() if enabled else autostart.disable()
+        except OSError as error:
+            QMessageBox.warning(self, APP_NAME, tr("autostart_failed", error=error))
+        self.autostart_action.blockSignals(True)
+        self.autostart_action.setChecked(autostart.enabled())
+        self.autostart_action.blockSignals(False)
 
     def _set_background(self, enabled: bool) -> None:
         self.session.set("background", enabled)

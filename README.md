@@ -26,6 +26,10 @@ The interface is in French or English, following the system language.
   (Ctrl+Z brings it back). These are also in the right-click menu. Ctrl+Y
   redoes, as does Ctrl+Shift+Z. Ctrl+S saves at once, and Ctrl+W closes the
   window, the note or the list, as Alt+F4 does.
+- Ctrl+F finds words in a note, Ctrl+H finds and replaces them, in a bar under
+  its text: every match is marked, Enter and Shift+Enter (or F3 and Shift+F3)
+  go to the next and previous one, **Aa** matches the case, **Replace all** is
+  one step that Ctrl+Z takes back, and Escape closes the bar.
 - Alt with the left button, from anywhere in a note, moves its window; Alt with
   the right button resizes it from the corner nearest to the click, the
   opposite corner staying put, so that moving the mouse away grows it and back
@@ -59,6 +63,12 @@ The text stays exactly as typed, so unchecking the option loses nothing.
   - Ctrl+Backspace deletes the row, Ctrl+Shift+Backspace the column;
   - the right-click menu also adds rows and columns, and deletes them.
 - Ctrl+L and Ctrl+T, or the right-click menu, insert a task or a table.
+- Formatting keys put the markers around the selection, or a pair of them to
+  type in without one; the same key again takes them away. Ctrl+B is bold,
+  Ctrl+I italic, Ctrl+Shift+X struck through, Ctrl+E code. Ctrl+1, 2 and 3
+  make the lines headings, Ctrl+Q a quote, Ctrl+Shift+L a bulleted list. They
+  are also in the right-click menu, under **Formatting**, and work whether the
+  option is checked or not: the markers are text like any other.
 
 ### History
 
@@ -125,6 +135,10 @@ an import never overwrites anything.
   in the top bar opens a menu to reopen the list or one of the last three notes
   opened, or to quit. **Quit** is also in the **⋮** menu.
 - Only one instance runs: launching the application again brings its list back.
+- **Start with the system**, in the **⋮** menu, launches the application when
+  you log in: an entry in `~/.config/autostart` on Linux, a value of the
+  registry's `Run` key on Windows. Unchecking it removes the entry, as
+  uninstalling does.
 
 ## Requirements
 
@@ -238,7 +252,8 @@ In the **⋮** menu, choose **Uninstall**, or run:
 powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\pense-bete\install.ps1" -Uninstall
 ```
 
-The application, its menu entry and its command are removed. It then asks
+The application, its menu entry, its command and its start with the system
+are removed. It then asks
 whether to delete the notes and settings as well — the default keeps them; in
 the application, that is the checkbox of the confirmation. `--purge` (`-Purge`
 on Windows) deletes them without asking. Only note directories are deleted, so a `PENSE_BETE_DIR`
@@ -311,7 +326,7 @@ pytest
 ```
 
 The tests run offscreen, in a throwaway home directory: they never touch the
-notes, settings or menu entries of the machine. GitHub runs them on every push,
+notes, settings, menu entries or start at login of the machine. GitHub runs them on every push,
 on Linux and on Windows, where `install.ps1` is tested; each system skips the
 other's installer tests.
 

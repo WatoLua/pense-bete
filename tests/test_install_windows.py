@@ -21,9 +21,17 @@ def profile(tmp_path):
     return places
 
 
+def script_env() -> dict:
+    """The environment for install.ps1, without the tests' settings but for the registry
+    key standing in for the Run key: uninstalling must never touch the real one."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PENSE_BETE_")}
+    env["PENSE_BETE_RUN_KEY"] = os.environ["PENSE_BETE_RUN_KEY"]
+    return env
+
+
 def install_ps1(profile, *args, repo=None, piped=False, path=None, api=None):
     """Run install.ps1 from this repository, or as `irm ... | iex` does when piped."""
-    env = {key: value for key, value in os.environ.items() if not key.startswith("PENSE_BETE_")}
+    env = script_env()
     env.update({key: str(path) for key, path in profile.items()})
     if repo is not None:
         env["PENSE_BETE_REPO"] = str(repo)
@@ -113,6 +121,22 @@ def test_uninstall_keeps_the_notes_by_default(profile):
     assert (data_dir / "a" / "note.json").exists()
 
 
+def test_uninstall_stops_the_start_with_the_session(profile):
+    import winreg
+    install_ps1(profile)
+    run_key = os.environ["PENSE_BETE_RUN_KEY"]
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run_key) as key:
+        winreg.SetValueEx(key, "pense-bete", 0, winreg.REG_SZ, '"x.exe"')
+        winreg.SetValueEx(key, "other", 0, winreg.REG_SZ, '"y.exe"')
+
+    install_ps1(profile, "-Uninstall")
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key) as key:
+        with pytest.raises(FileNotFoundError):
+            winreg.QueryValueEx(key, "pense-bete")
+        assert winreg.QueryValueEx(key, "other")[0] == '"y.exe"'
+
+
 def test_purge_deletes_only_what_the_application_wrote(profile):
     install_ps1(profile)
     app_data = profile["APPDATA"] / "pense-bete"
@@ -190,7 +214,7 @@ def bundle(tmp_path):
 
 
 def run_ps1(profile, script, *args, path=None, api=None):
-    env = {key: value for key, value in os.environ.items() if not key.startswith("PENSE_BETE_")}
+    env = script_env()
     env.update({key: str(value) for key, value in profile.items()})
     if path is not None:
         env["PATH"] = path

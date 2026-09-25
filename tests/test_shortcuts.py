@@ -53,7 +53,7 @@ def test_setting_the_default_keys_again_forgets_the_change(tmp_path):
 
 def test_a_key_is_taken_only_where_the_actions_meet():
     assert settings.conflict("save", "Ctrl+L") == "insert_task"  # both in a note
-    assert settings.conflict("close_note", "Ctrl+F") is None  # the search is the list's
+    assert settings.conflict("close_note", "Esc") is None  # clearing the search is the list's
     assert settings.conflict("save", "F1") == "shortcuts"  # F1 works everywhere
     assert settings.conflict("save", "Ctrl+S") is None  # its own key
 

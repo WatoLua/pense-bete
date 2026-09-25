@@ -54,6 +54,8 @@ $DefaultDir = Join-Path $env:LOCALAPPDATA "Programs\$AppId"
 # PENSE_BETE_SHORTCUT_DIR stands in for the Start menu in the tests.
 $ShortcutDir = if ($env:PENSE_BETE_SHORTCUT_DIR) { $env:PENSE_BETE_SHORTCUT_DIR } else { [Environment]::GetFolderPath("Programs") }
 $Shortcut = Join-Path $ShortcutDir "$AppName.lnk"
+# Where the application records that it starts with the session, as a value named $AppId.
+$RunKey = "HKCU:\" + $(if ($env:PENSE_BETE_RUN_KEY) { $env:PENSE_BETE_RUN_KEY } else { "Software\Microsoft\Windows\CurrentVersion\Run" })
 # Where the application keeps its data, as pensebete/config.py computes it.
 $AppData = Join-Path $env:APPDATA $AppId
 $DataDir = if ($env:PENSE_BETE_DIR) { $env:PENSE_BETE_DIR } else { Join-Path $AppData "notes" }
@@ -148,6 +150,7 @@ function Do-Uninstall {
         }
     }
     Remove-Item -LiteralPath $Shortcut -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -LiteralPath $RunKey -Name $AppId -Force -ErrorAction SilentlyContinue
     if ($purgeData) {
         Delete-Data
         Info (T "{0} is uninstalled, with its notes and settings." "{0} est d\u00e9sinstall\u00e9, avec ses post-its et ses r\u00e9glages." $AppName)
