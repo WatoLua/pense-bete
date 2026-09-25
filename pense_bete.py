@@ -7,7 +7,13 @@ immediately when its window is closed. The application itself is the pensebete
 package next to this script.
 """
 
-from pensebete.app import main
+import sys
+from pathlib import Path
+
+from pensebete.app import main, self_test
 
 if __name__ == "__main__":
+    # pense_bete.py --self-test <report>: check that a build starts, then quit.
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        sys.exit(self_test(Path(sys.argv[2])))
     main()

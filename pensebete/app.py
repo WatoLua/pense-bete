@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QLibraryInfo, QLocale, QSocketNotifier, QTranslator
 from PySide6.QtGui import QIcon
@@ -94,3 +95,41 @@ def main() -> None:
     window.auto_update()
     keep_alive = save_on_shutdown(app, window)  # referenced until exec returns
     sys.exit(app.exec())
+
+
+def self_test(report: Path) -> int:
+    """Start what a launch starts, notes and windows included, in throwaway directories,
+    and write what happened to report: a build is checked this way before it is
+    published, a missing Qt plugin or module showing here rather than on a user's
+    machine. Returns the exit code, 0 when everything worked."""
+    import tempfile
+    import traceback
+    lines = []
+    try:
+        app = QApplication.instance() or QApplication([sys.argv[0]])
+        app.setStyle("Fusion")
+        icon = QIcon(str(ICON_PATH))
+        if icon.pixmap(32, 32).isNull():
+            raise RuntimeError(f"the icon {ICON_PATH} cannot be drawn: is the SVG plugin missing?")
+        lines.append(f"icon: {ICON_PATH}")
+        with tempfile.TemporaryDirectory() as temporary:
+            from .about import AboutDialog, ShortcutsDialog
+            window = MainWindow(NoteStore(Path(temporary) / "notes"),
+                                Session(Path(temporary) / "session.json"), QLocalServer())
+            window.create_note()
+            note_window = next(iter(window.windows.values()))
+            note_window.content_edit.setPlainText("self-test")
+            note_window.save()
+            AboutDialog(window)
+            ShortcutsDialog(window)
+            lines.append(f"notes: {[note.content for note in window.store.load_all()]}")
+            window.quitting = True
+            for note_window in list(window.windows.values()):
+                note_window.discard()
+        lines.append("ok")
+        code = 0
+    except Exception:  # everything is worth reporting here
+        lines.append(traceback.format_exc())
+        code = 1
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return code

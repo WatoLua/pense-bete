@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (
 from .about import AboutDialog, ShortcutsDialog
 from .archive import ArchiveError, export_notes, import_notes
 from .config import (
-    APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH,
+    APP_DIR, APP_ID, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, FROZEN,
+    ICON_PATH,
     RECENT_NOTES,
 )
 from .i18n import tr
@@ -509,7 +510,7 @@ class MainWindow(QWidget):
         # Closed first, so the new instance does not hand itself over to this one.
         self.server.close()
         self.quit_app()
-        QProcess.startDetached(sys.executable, [str(APP_DIR / "pense_bete.py")])
+        QProcess.startDetached(sys.executable, [] if FROZEN else [str(APP_DIR / "pense_bete.py")])
 
     def auto_update(self) -> None:
         """At launch, when enabled: update in a background thread, keeping the interface

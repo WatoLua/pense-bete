@@ -6,11 +6,18 @@ import sys
 from pathlib import Path
 
 WINDOWS = sys.platform == "win32"
-# The directory holding the launcher, the package and the installers.
-APP_DIR = Path(__file__).resolve().parent.parent
+# Built by PyInstaller into an executable that carries Python and PySide6, for Windows
+# machines without Python.
+FROZEN = bool(getattr(sys, "frozen", False))
+# The directory holding the launcher, or the executable, and the installers.
+APP_DIR = (Path(sys.executable) if FROZEN else Path(__file__)).resolve().parent
+if not FROZEN:
+    APP_DIR = APP_DIR.parent
 # Run from a git clone, the application is the development version: it keeps its own
 # notes, menu entry and window class, apart from the installed application.
-DEV_MODE = (APP_DIR / ".git").exists()
+DEV_MODE = not FROZEN and (APP_DIR / ".git").exists()
+# The executable of the standalone build, in its directory.
+EXECUTABLE_NAME = "Pense-bete.exe"
 APP_ID = "pense-bete-dev" if DEV_MODE else "pense-bete"
 APP_NAME = "Pense-bête (dev)" if DEV_MODE else "Pense-bête"
 # The notes, and the window state kept apart from them so that moving a window never
