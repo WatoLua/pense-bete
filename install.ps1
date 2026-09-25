@@ -42,9 +42,12 @@ $ErrorActionPreference = "Stop"
 $AppId = if ($Dev) { "pense-bete-dev" } else { "pense-bete" }
 $AppName = [regex]::Unescape($(if ($Dev) { "Pense-b\u00eate (dev)" } else { "Pense-b\u00eate" }))
 $RepoUrl = if ($env:PENSE_BETE_REPO) { $env:PENSE_BETE_REPO } else { "https://github.com/WatoLua/pense-bete.git" }
-# Empty when the script runs through Invoke-Expression: the sources are then cloned.
+# The application beside the script, as a clone, an archive or the standalone build;
+# empty when the script runs through Invoke-Expression: the application is then
+# downloaded.
 $SourceDir = ""
-if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot "pense_bete.py"))) {
+if ($PSScriptRoot -and ((Test-Path -LiteralPath (Join-Path $PSScriptRoot "pense_bete.py")) -or
+                        (Test-Path -LiteralPath (Join-Path $PSScriptRoot "Pense-bete.exe")))) {
     $SourceDir = $PSScriptRoot
 }
 $DefaultDir = Join-Path $env:LOCALAPPDATA "Programs\$AppId"
@@ -239,8 +242,10 @@ function Download-Bundle {
     Info (T "Downloading the standalone version of {0} from {1}" "T\u00e9l\u00e9chargement de la version autonome de {0} depuis {1}" @($AppName, $RepoUrl))
     try {
         $tag = Newest-Tag $api
-        $release = Invoke-RestMethod -Uri "$api/releases/tags/$($tag.name)" -Headers @{ "User-Agent" = "pense-bete" } -UseBasicParsing
-        $asset = @($release.assets | Where-Object { $_.name -eq $BundleAsset })[0]
+        # Not $release: PowerShell names are case-insensitive, and that one would hide
+        # the script's $Release.
+        $githubRelease = Invoke-RestMethod -Uri "$api/releases/tags/$($tag.name)" -Headers @{ "User-Agent" = "pense-bete" } -UseBasicParsing
+        $asset = @($githubRelease.assets | Where-Object { $_.name -eq $BundleAsset })[0]
     } catch {
         $asset = $null
     }
@@ -288,11 +293,11 @@ function Check-Dependencies {
     } elseif (-not $SourceDir) {
         $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
         $script:Cleanup = $SourceDir
-        $release = Latest-Release
+        $newest = Latest-Release
         $branch = @()
-        if ($release) {
-            Info (T "Downloading {0} {1} from {2}" "T\u00e9l\u00e9chargement de {0} {1} depuis {2}" @($AppName, $release, $RepoUrl))
-            $branch = @("--branch", $release)
+        if ($newest) {
+            Info (T "Downloading {0} {1} from {2}" "T\u00e9l\u00e9chargement de {0} {1} depuis {2}" @($AppName, $newest, $RepoUrl))
+            $branch = @("--branch", $newest)
         } else {
             Warn (T "{0} has no release yet: installing its latest commit." "{0} n'a encore aucune version publi\u00e9e : installation de son dernier commit." $RepoUrl)
         }
