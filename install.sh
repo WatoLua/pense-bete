@@ -3,10 +3,19 @@
 #
 # Usage: ./install.sh [install-dir]   install (asks for the directory if not given)
 #        ./install.sh --uninstall     remove the application (notes are kept)
+#
+# Also runs on its own, without a clone of the repository:
+#   curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash
 set -euo pipefail
 
 APP_ID="pense-bete"
-SOURCE_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_URL="${PENSE_BETE_REPO:-https://github.com/WatoLua/pense-bete.git}"
+# Empty when the script is piped into bash: the sources are then cloned from REPO_URL.
+SOURCE_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    SOURCE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    [[ -f "$SOURCE_DIR/pense_bete.py" ]] || SOURCE_DIR=""
+fi
 DEFAULT_DIR="$HOME/.local/opt/$APP_ID"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID.desktop"
 BIN_LINK="$HOME/.local/bin/$APP_ID"
@@ -25,7 +34,7 @@ fail() { printf '\033[1;31m%s\033[0m %s\n' "$(t "Error:" "Erreur :")" "$*" >&2; 
 
 ask_yes() {  # ask_yes "question" -> true on yes, default yes
     local answer
-    read -r -p "$1 $(t "[Y/n]" "[O/n]") " answer
+    read -r -p "$1 $(t "[Y/n]" "[O/n]") " answer </dev/tty
     [[ -z "$answer" || "$answer" =~ ^[yYoO] ]]
 }
 
@@ -51,6 +60,14 @@ check_dependencies() {
     command -v python3 >/dev/null || fail "$(t "python3 not found, please install it first." "python3 est introuvable, installez-le d'abord.")"
     command -v git >/dev/null || fail "$(t "git not found, please install it first (it versions the notes)." "git est introuvable, installez-le d'abord (il versionne les post-its).")"
 
+    if [[ -z "$SOURCE_DIR" ]]; then
+        SOURCE_DIR="$(mktemp -d)"
+        trap 'rm -rf -- "$SOURCE_DIR"' EXIT
+        info "$(t "Downloading Pense-bête from $REPO_URL" "Téléchargement de Pense-bête depuis $REPO_URL")"
+        git clone --quiet --depth 1 -- "$REPO_URL" "$SOURCE_DIR" \
+            || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
+    fi
+
     if python3 -c "import PySide6" 2>/dev/null; then
         return
     fi
@@ -68,7 +85,7 @@ install() {
     local target="${1:-}"
     check_dependencies
     if [[ -z "$target" ]]; then
-        read -r -p "$(t "Installation directory [$DEFAULT_DIR]: " "Dossier d'installation [$DEFAULT_DIR] : ")" target
+        read -r -p "$(t "Installation directory [$DEFAULT_DIR]: " "Dossier d'installation [$DEFAULT_DIR] : ")" target </dev/tty
         target="${target:-$DEFAULT_DIR}"
     fi
     target="${target/#\~/$HOME}"
