@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REPO_DIR
+from conftest import REPO_DIR, posix_only
+
+pytestmark = posix_only
 
 
 @pytest.fixture

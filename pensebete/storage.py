@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QDateTime, QLocale
 
-from .config import DEFAULT_COLOR
+from .config import DEFAULT_COLOR, SUBPROCESS_OPTIONS
 from .i18n import tr
 
 # Each note lives in its own directory and git repository: <DATA_DIR>/<note id>/note.json.
@@ -25,15 +25,17 @@ class GitRepo:
         if not (path / ".git").exists():
             path.mkdir(parents=True, exist_ok=True)
             self._run("init", "--quiet")
+            # The note is stored as written: Git for Windows would otherwise turn its line
+            # ends into CRLF, and back, by default.
+            self._run("config", "core.autocrlf", "false")
             # Commits must never fail for lack of an identity on this machine.
             if not self._run("config", "user.email", check=False).stdout.strip():
                 self._run("config", "user.name", "Pense-bête")
                 self._run("config", "user.email", "pense-bete@localhost")
 
     def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", *args], cwd=self.path, capture_output=True, text=True, check=check
-        )
+        return subprocess.run(["git", *args], cwd=self.path, capture_output=True, check=check,
+                              **SUBPROCESS_OPTIONS)
 
     def commit_file(self, filename: str, message: str) -> None:
         """Stage one file and commit it if it changed."""
@@ -49,8 +51,11 @@ class GitRepo:
             return []
         # All contents in one git process, which keeps long histories fast to open.
         requests = "".join(f"{commit}:{filename}\n" for commit, _ in commits).encode()
+        # In bytes: sizes are counted in bytes, and contents decoded once cut out.
+        options = {key: value for key, value in SUBPROCESS_OPTIONS.items()
+                   if key not in ("encoding", "errors")}
         output = subprocess.run(["git", "cat-file", "--batch"], cwd=self.path, input=requests,
-                                capture_output=True, check=True).stdout
+                                capture_output=True, check=True, **options).stdout
         versions, position = [], 0
         for commit, timestamp in commits:
             end = output.index(b"\n", position)

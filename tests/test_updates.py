@@ -69,8 +69,27 @@ def test_install_release_installs_that_tag(installed):
     assert clone[:2] == ("git", "clone")
     assert clone[clone.index("--branch") + 1] == "v1.2.10"
     assert clone[-2] == updates.REPO_URL
-    assert install[0] == "bash" and install[1].endswith("install.sh")
-    assert install[2:] == ("--yes", str(installed))
+    source = updates.Path(clone[-1])
+    assert list(install) == updates.installer(source, "yes", target=installed)
+
+
+def test_the_installer_command_on_linux(monkeypatch, tmp_path):
+    monkeypatch.setattr(updates, "WINDOWS", False)
+
+    assert updates.installer(tmp_path, "uninstall", "yes", "purge") == [
+        "bash", str(tmp_path / "install.sh"), "--uninstall", "--yes", "--purge"]
+    assert updates.installer(tmp_path, "yes", target=tmp_path / "app") == [
+        "bash", str(tmp_path / "install.sh"), "--yes", str(tmp_path / "app")]
+
+
+def test_the_installer_command_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(updates, "WINDOWS", True)
+
+    command = updates.installer(tmp_path, "uninstall", "yes", "dev")
+    assert command[:5] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+    assert command[5:] == [str(tmp_path / "install.ps1"), "-Uninstall", "-Yes", "-Dev"]
+    assert updates.installer(tmp_path, "yes", target=tmp_path / "app")[-3:] == [
+        "-Yes", "-Target", str(tmp_path / "app")]
 
 
 def test_a_failed_download_stops_the_update(installed):

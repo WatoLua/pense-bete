@@ -114,7 +114,7 @@ def display_server() -> str:
     name = QGuiApplication.platformName()
     if name == "xcb":
         return "XWayland" if os.environ.get("WAYLAND_DISPLAY") else "X11"
-    return {"wayland": "Wayland"}.get(name, name)
+    return {"wayland": "Wayland", "windows": "Windows"}.get(name, name)
 
 
 def version_text() -> str:

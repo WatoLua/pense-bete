@@ -3,6 +3,7 @@ import signal
 
 import pytest
 
+from conftest import posix_only
 from pensebete.app import save_on_shutdown
 
 
@@ -22,20 +23,22 @@ class FakeWindow:
 
 @pytest.fixture
 def restore_signals():
-    handlers = {number: signal.getsignal(number)
-                for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    handlers = {getattr(signal, name): signal.getsignal(getattr(signal, name))
+                for name in ("SIGTERM", "SIGINT", "SIGHUP") if hasattr(signal, name)}
     yield
     for number, handler in handlers.items():
         signal.signal(number, handler)
     signal.set_wakeup_fd(-1)
 
 
-@pytest.mark.parametrize("number", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
-def test_a_stop_signal_quits_the_usual_way(qtbot, qapp, restore_signals, number):
+# On Windows, os.kill with these signals terminates the process outright: nothing to test.
+@posix_only
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGINT", "SIGHUP"])
+def test_a_stop_signal_quits_the_usual_way(qtbot, qapp, restore_signals, name):
     window = FakeWindow()
     keep_alive = save_on_shutdown(qapp, window)
 
-    os.kill(os.getpid(), number)
+    os.kill(os.getpid(), getattr(signal, name))
 
     qtbot.waitUntil(lambda: window.calls == ["quit_app"], timeout=2000)
     del keep_alive

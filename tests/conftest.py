@@ -1,14 +1,15 @@
 """Every test runs away from the user's notes, settings and desktop.
 
 The environment is set before the application is imported, since its paths are
-computed at import time: HOME and the XDG directories point into a throwaway
-directory, Qt draws offscreen, and the interface is in English.
+computed at import time: HOME, the XDG directories and their Windows counterparts point
+into a throwaway directory, Qt draws offscreen, and the interface is in English.
 """
 
 import atexit
 import os
 import shutil
 import site
+import sys
 import tempfile
 from pathlib import Path
 
@@ -22,6 +23,11 @@ os.environ["PYTHONUSERBASE"] = site.getuserbase()
 os.environ["HOME"] = str(HOME)
 os.environ["XDG_DATA_HOME"] = str(HOME / ".local" / "share")
 os.environ["XDG_CONFIG_HOME"] = str(HOME / ".config")
+# On Windows, where the application and install.ps1 look instead, the Start menu included.
+os.environ["USERPROFILE"] = str(HOME)
+os.environ["APPDATA"] = str(HOME / "AppData" / "Roaming")
+os.environ["LOCALAPPDATA"] = str(HOME / "AppData" / "Local")
+os.environ["PENSE_BETE_SHORTCUT_DIR"] = str(HOME / "Start Menu")
 os.environ.pop("PENSE_BETE_DIR", None)
 os.environ.pop("PENSE_BETE_REPO", None)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -106,3 +112,7 @@ def tagged_repo(tmp_path):
     git(*identity, "tag", "-a", "-m", "Release", "v1.10.0", newer, cwd=repo)
     git("tag", "v2.0.0-rc1", newer, cwd=repo)
     return repo, {"v1.9.0": older, "v1.10.0": newer}
+
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="Linux only")

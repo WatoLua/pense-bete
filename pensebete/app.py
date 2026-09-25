@@ -1,5 +1,6 @@
 """Starting the application: one instance per user, its windows back as they were."""
 
+import getpass
 import os
 import signal
 import socket
@@ -10,7 +11,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
-from .config import APP_ID, APP_NAME, DATA_DIR, ICON_PATH, SESSION_FILE
+from .config import APP_ID, APP_NAME, DATA_DIR, ICON_PATH, SESSION_FILE, WINDOWS
 from .i18n import LANGUAGE
 from .main_window import MainWindow
 from .session import Session
@@ -34,21 +35,32 @@ def save_on_shutdown(app: QApplication, window: MainWindow) -> list:
     signal.set_wakeup_fd(wakeup_write.fileno())
     notifier = QSocketNotifier(wakeup_read.fileno(), QSocketNotifier.Read)
     notifier.activated.connect(lambda: wakeup_read.recv(64))
-    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(number, lambda *_: window.quit_app())
+    # Windows has no SIGHUP; it ends a session through commitDataRequest above.
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), lambda *_: window.quit_app())
     return [wakeup_read, wakeup_write, notifier]
 
 
-def main() -> None:
+def linux_display_defaults() -> None:
+    """How Qt draws on Linux, where a platform set by the user still wins."""
     # X11, through XWayland in a Wayland session, lets windows be put back where they
     # were: Wayland leaves window positions to the compositor. Qt's xcb plugin needs
-    # libxcb-cursor0; without it, Qt falls back to Wayland. A platform set by the user
-    # still wins.
+    # libxcb-cursor0; without it, Qt falls back to Wayland.
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
     # In the Wayland fallback, Qt draws the title bar itself. Its default decoration
     # centers the title over the whole bar, where the buttons cover it on narrow note
     # windows; bradient aligns it left.
     os.environ.setdefault("QT_WAYLAND_DECORATION", "bradient")
+
+
+def main() -> None:
+    if sys.platform.startswith("linux"):
+        linux_display_defaults()
+    elif WINDOWS:
+        # The taskbar groups the windows under the application rather than Python.
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     # Matches the desktop entry install.sh writes, so the desktop shell groups the
@@ -63,7 +75,7 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
 
     # One instance per user: a second launch asks the running one to show its window.
-    server_name = f"{APP_ID}-{os.getuid()}"
+    server_name = f"{APP_ID}-{getpass.getuser()}"
     other = QLocalSocket()
     other.connectToServer(server_name)
     if other.waitForConnected(1000):

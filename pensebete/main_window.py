@@ -41,7 +41,8 @@ from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
 from .updates import (
-    can_update, command_error, install_release, release_notes, run_command, update_available,
+    can_update, command_error, install_release, installer, release_notes, run_command,
+    update_available,
 )
 
 
@@ -476,7 +477,7 @@ class MainWindow(QWidget):
         # Closed first, so the new instance does not hand itself over to this one.
         self.server.close()
         self.quit_app()
-        QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
+        QProcess.startDetached(sys.executable, [str(APP_DIR / "pense_bete.py")])
 
     def auto_update(self) -> None:
         """At launch, when enabled: update in a background thread, keeping the interface
@@ -514,9 +515,9 @@ class MainWindow(QWidget):
         purging = purge.isChecked()
         self.save_all()
         try:
-            result = run_command("bash", str(APP_DIR / "install.sh"), "--uninstall", "--yes",
-                                 *(["--purge"] if purging else []),
-                                 *(["--dev"] if DEV_MODE else []))
+            result = run_command(*installer(APP_DIR, "uninstall", "yes",
+                                            *(["purge"] if purging else []),
+                                            *(["dev"] if DEV_MODE else [])))
             if result.returncode:
                 raise RuntimeError(command_error(result))
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:

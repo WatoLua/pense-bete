@@ -10,12 +10,12 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from .config import APP_DIR, RELEASE_FILE, REPO_URL, VERSION_FILE
+from .config import APP_DIR, RELEASE_FILE, REPO_URL, SUBPROCESS_OPTIONS, VERSION_FILE, WINDOWS
 
 
 def run(*args: str) -> subprocess.CompletedProcess:
     """Run a command, its output captured for error messages."""
-    return subprocess.run(args, capture_output=True, text=True, timeout=300)
+    return subprocess.run(args, capture_output=True, timeout=300, **SUBPROCESS_OPTIONS)
 
 
 def run_command(*args: str) -> subprocess.CompletedProcess:
@@ -64,6 +64,18 @@ def latest_release(runner=run) -> tuple[str, str] | None:
     return tag, commits[tag]
 
 
+def installer(directory: Path, *options: str, target: Path | None = None) -> list[str]:
+    """The command running the installer of a directory with options such as "yes" or
+    "uninstall": install.sh on Linux, install.ps1 on Windows, each with its own syntax."""
+    if WINDOWS:
+        command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                   "-File", str(directory / "install.ps1")]
+        command += [f"-{option.capitalize()}" for option in options]
+        return command + (["-Target", str(target)] if target is not None else [])
+    command = ["bash", str(directory / "install.sh")] + [f"--{option}" for option in options]
+    return command + ([str(target)] if target is not None else [])
+
+
 def update_available(runner=run) -> str | None:
     """The tag of the newest release when it is not the installed commit."""
     release = latest_release(runner)
@@ -79,7 +91,7 @@ def install_release(tag: str, runner=run) -> None:
         result = runner("git", "clone", "--quiet", "--depth", "1", "--branch", tag, "--",
                         REPO_URL, str(source))
         if result.returncode == 0:
-            result = runner("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
+            result = runner(*installer(source, "yes", target=APP_DIR))
     if result.returncode:
         raise RuntimeError(command_error(result))
 
@@ -108,7 +120,7 @@ class InstalledVersion:
 
     release: str = ""  # vX.Y.Z, "" when unknown
     commit: str = ""  # abbreviated
-    installed: datetime | None = None  # when install.sh put it in place
+    installed: datetime | None = None  # when the installer put it in place
     branch: str = ""  # in development only
     modified: bool = False  # in development: changes not committed
 
