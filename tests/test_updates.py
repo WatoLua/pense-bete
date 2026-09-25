@@ -227,8 +227,8 @@ def test_without_git_a_release_is_downloaded_and_installed_with_its_commit(insta
 
     def runner(*args):
         calls.append(args)
-        source = updates.Path(args[1]).parent
-        assert (source / "pensebete" / "app.py").read_text() == "app"
+        script = next(arg for arg in args if arg.endswith(("install.sh", "install.ps1")))
+        assert (updates.Path(script).parent / "pensebete" / "app.py").read_text() == "app"
         return completed()
     release = updates.Release("v1.10.0", "new", "https://example.com/zip")
     fetcher = fake_github({release.archive: zip_of({"install.sh": "", "pensebete/app.py": "app"})})
@@ -236,8 +236,9 @@ def test_without_git_a_release_is_downloaded_and_installed_with_its_commit(insta
     updates.install_release(release, runner, fetcher)
 
     [install] = calls
-    assert list(install[2:]) == updates.installer(updates.Path("."), "yes", target=installed,
-                                                  release=release)[2:]
+    script = next(arg for arg in install if arg.endswith(("install.sh", "install.ps1")))
+    assert list(install) == updates.installer(updates.Path(script).parent, "yes",
+                                              target=installed, release=release)
 
 
 def test_an_archive_that_climbs_out_is_refused(installed):
