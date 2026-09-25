@@ -201,12 +201,19 @@ function Newest-Tag([string]$Api) {
 function Download-Zip([string]$Url) {
     $zip = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid()).zip"
     $unpacked = "$zip.d"
+    # Windows PowerShell redraws its progress bar for every block received, which slows a
+    # download of tens of megabytes down many times over: it is hidden meanwhile. The zip
+    # is unpacked by .NET, much faster than Expand-Archive.
+    $progress = $ProgressPreference
+    $ProgressPreference = "SilentlyContinue"
     try {
         Invoke-WebRequest -Uri $Url -Headers @{ "User-Agent" = "pense-bete" } -OutFile $zip -UseBasicParsing
-        Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($zip, $unpacked)
         $top = @(Get-ChildItem -LiteralPath $unpacked -Directory)[0].FullName
         Move-Item -LiteralPath $top -Destination $SourceDir
     } finally {
+        $ProgressPreference = $progress
         Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $unpacked -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -253,6 +260,7 @@ function Download-Bundle {
     if (-not $asset) {
         Fail (T "The standalone version of {0} is not available yet: try again in a few minutes, or install Python." "La version autonome de {0} n'est pas encore disponible : r\u00e9essayez dans quelques minutes, ou installez Python." $tag.name)
     }
+    Info (T "{0} MB to download, please wait..." "{0} Mo \u00e0 t\u00e9l\u00e9charger, patientez..." ([math]::Round($asset.size / 1MB)))
     try {
         Download-Zip $asset.browser_download_url
     } catch {
