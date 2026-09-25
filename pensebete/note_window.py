@@ -327,6 +327,14 @@ class NoteWindow(QWidget):
                 and editing.table(clicked) is not None:
             self.content_edit.setTextCursor(clicked)
         menu = self.content_edit.createStandardContextMenu()
+        # Undo and redo as the keys do them, an alignment with the edit it followed.
+        for action in menu.actions():
+            if action.objectName() in ("edit-undo", "edit-redo"):
+                action.triggered.disconnect()
+                action.triggered.connect(editing.undo if action.objectName() == "edit-undo"
+                                         else editing.redo)
+                if action.objectName() == "edit-redo":
+                    action.setShortcut(QKeySequence("Ctrl+Y"))
         if self.markdown and editing.table() is not None:
             menu.addSeparator()
             for label, shortcut, action, enabled in (
@@ -399,11 +407,19 @@ class NoteWindow(QWidget):
         )
 
     def eventFilter(self, watched, event) -> bool:
-        if watched is self.content_edit and event.type() == QEvent.KeyPress \
-                and event.key() == Qt.Key_Delete \
-                and event.modifiers() & ~Qt.KeypadModifier == Qt.ControlModifier:
-            self.clear_all()
-            return True
+        if watched is self.content_edit and event.type() == QEvent.KeyPress:
+            modifiers = event.modifiers() & ~Qt.KeypadModifier
+            if event.key() == Qt.Key_Delete and modifiers == Qt.ControlModifier:
+                self.clear_all()
+                return True
+            # Ctrl+Y redoes as well as Ctrl+Shift+Z, the usual key on Linux.
+            if event.matches(QKeySequence.Undo):
+                self.markdown_editing.undo()
+                return True
+            if event.matches(QKeySequence.Redo) \
+                    or (event.key() == Qt.Key_Y and modifiers == Qt.ControlModifier):
+                self.markdown_editing.redo()
+                return True
         if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
             if event.angleDelta().y():
                 self.zoom(1 if event.angleDelta().y() > 0 else -1)

@@ -10,7 +10,8 @@ import re
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import (
-    QColor, QFont, QFontDatabase, QKeyEvent, QSyntaxHighlighter, QTextCharFormat, QTextCursor,
+    QColor, QFont, QFontDatabase, QKeyEvent, QKeySequence, QSyntaxHighlighter, QTextCharFormat,
+    QTextCursor,
 )
 from PySide6.QtWidgets import QPlainTextEdit
 
@@ -212,7 +213,10 @@ class MarkdownEditing(QObject):
         self.align_timer.setSingleShot(True)
         self.align_timer.setInterval(TABLE_ALIGN_DELAY_MS)
         self.align_timer.timeout.connect(self._align_current)
-        editor.document().contentsChange.connect(self._on_contents_change)
+        # The text right after an alignment: undo and redo take the alignment and the
+        # edit it followed as one step there.
+        self.aligned_text: str | None = None
+        self.undone_text: str | None = None
 
     def eventFilter(self, watched, event) -> bool:
         # The viewport still sends events while the editor is being destroyed.
@@ -230,17 +234,19 @@ class MarkdownEditing(QObject):
                     toggle_checkbox(*checkbox)
                     return True
         elif event.type() == QEvent.KeyPress:
-            return self._toggle_key(event) or self._table_key(event) or self._continue_list(event)
+            if self._toggle_key(event) or self._table_key(event) or self._continue_list(event):
+                return True
+            if self.table_start is not None and _is_typing(event):
+                self.align_timer.start()
         return False
 
     def _toggle_key(self, event: QKeyEvent) -> bool:
-        """Ctrl+Space with the cursor in a task's box turns it to its next state."""
+        """Ctrl+Space anywhere on a task's line turns its box to the next state."""
         if event.key() != Qt.Key_Space or event.modifiers() != Qt.ControlModifier:
             return False
         cursor = self.editor.textCursor()
         task = TASK.match(cursor.block().text())
-        # From just before "[" to just after "]".
-        if task is None or not task.end(1) <= cursor.positionInBlock() <= task.end():
+        if task is None:
             return False
         position = cursor.position()
         toggle_checkbox(QTextCursor(cursor.block()), task.end(1) + 1)
@@ -357,10 +363,28 @@ class MarkdownEditing(QObject):
                 break
         self._replace(start, len(lines), tables.align_table(lines), (row, cell, END_OF_CELL))
 
-    def _on_contents_change(self, _position: int, _removed: int, _added: int) -> None:
-        # Also emitted when the highlighting repaints: aligning an aligned table does nothing.
-        if self.enabled and not self.replacing and self.table_start is not None:
-            self.align_timer.start()
+    def undo(self) -> None:
+        """Undo, taking back an alignment together with the edit it followed: undoing
+        the alignment alone would leave the table to be aligned again."""
+        document = self.editor.document()
+        steps = 2 if self._just_aligned() and document.availableUndoSteps() >= 2 else 1
+        for _ in range(steps):
+            self.editor.undo()
+        self.undone_text = document.toPlainText() if steps == 2 else None
+
+    def redo(self) -> None:
+        """Redo, bringing back an edit and the alignment that followed it as one step."""
+        document = self.editor.document()
+        steps = 2 if self.undone_text == document.toPlainText() \
+            and document.availableRedoSteps() >= 2 else 1
+        for _ in range(steps):
+            self.editor.redo()
+        self.undone_text = None
+        if steps == 2:
+            self.aligned_text = document.toPlainText()
+
+    def _just_aligned(self) -> bool:
+        return self.aligned_text is not None and self.aligned_text == self.editor.toPlainText()
 
     def _align_current(self) -> None:
         """Align the table being typed in, the cursor staying where it is in its cell."""
@@ -370,7 +394,7 @@ class MarkdownEditing(QObject):
         start, lines, row, cell, offset = table
         aligned = tables.align_table(lines, keep=(row, cell, offset))
         if aligned != lines:
-            self._replace(start, len(lines), aligned, (row, cell, offset), join=True)
+            self._replace(start, len(lines), aligned, (row, cell, offset), aligning=True)
 
     def _on_cursor_moved(self) -> None:
         if self.replacing:
@@ -390,22 +414,21 @@ class MarkdownEditing(QObject):
         lines = _table_lines(first)
         aligned = tables.align_table(lines)
         if aligned != lines:
-            self._replace(first.blockNumber(), len(lines), aligned, None, join=True)
+            self._replace(first.blockNumber(), len(lines), aligned, None, aligning=True)
 
     def _replace(self, start: int, count: int, lines: list[str],
-                 target: tuple[int, int, int] | None, join: bool = False) -> None:
+                 target: tuple[int, int, int] | None, aligning: bool = False) -> None:
         """Put new lines in place of a table's, then the cursor at (row, cell, offset).
 
-        Aligning joins the edit it follows, so that undo takes back the typing and the
-        alignment together, rather than the alignment alone, which would come back.
         Without a target, the editor's cursor, outside the table, follows by itself.
+        An alignment is recorded, for undo to take it back with the edit before it.
         """
         document = self.editor.document()
         first, last = document.findBlockByNumber(start), document.findBlockByNumber(start + count - 1)
         cursor = QTextCursor(first)
         self.replacing = True
         try:
-            cursor.joinPreviousEditBlock() if join else cursor.beginEditBlock()
+            cursor.beginEditBlock()
             cursor.setPosition(last.position() + len(last.text()), QTextCursor.KeepAnchor)
             cursor.insertText("\n".join(lines))
             cursor.endEditBlock()
@@ -417,7 +440,19 @@ class MarkdownEditing(QObject):
                 self.editor.setTextCursor(moved)
         finally:
             self.replacing = False
+        self.aligned_text = document.toPlainText() if aligning else None
         self._on_cursor_moved()
+
+
+def _is_typing(event: QKeyEvent) -> bool:
+    """Whether a key changes the text: a character, a deletion, a paste or a cut. Undo and
+    redo do not count, since aligning after them would clear what redo can bring back."""
+    if event.matches(QKeySequence.Paste) or event.matches(QKeySequence.Cut):
+        return True
+    if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+        return True
+    return bool(event.text()) and event.text().isprintable() \
+        and not event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier)
 
 
 def _table_start(block):

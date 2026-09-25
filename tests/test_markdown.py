@@ -183,7 +183,7 @@ def key(window, key, modifiers=Qt.NoModifier):
 
 def test_a_table_being_typed_in_is_aligned_once_the_typing_pauses(qtbot, table_window):
     put_cursor(table_window, 2, 11)  # after "Ann"
-    table_window.content_edit.insertPlainText("abelle")
+    qtbot.keyClicks(table_window.content_edit, "abelle")
 
     qtbot.waitUntil(lambda: lines(table_window)[0] == "| Day | Who       |", timeout=2000)
     assert lines(table_window)[2] == "| Mon | Annabelle |"
@@ -192,21 +192,40 @@ def test_a_table_being_typed_in_is_aligned_once_the_typing_pauses(qtbot, table_w
 
 def test_a_space_just_typed_survives_the_alignment(qtbot, table_window):
     put_cursor(table_window, 2, 11)
-    table_window.content_edit.insertPlainText("abelle ")
+    qtbot.keyClicks(table_window.content_edit, "abelle ")
 
     qtbot.waitUntil(lambda: lines(table_window)[1] == "| --- | ---------- |", timeout=2000)
-    table_window.content_edit.insertPlainText("B.")
+    qtbot.keyClicks(table_window.content_edit, "B.")
     assert lines(table_window)[2].startswith("| Mon | Annabelle B.")
 
 
 def test_undo_takes_back_the_typing_and_the_alignment_together(qtbot, table_window):
+    editor = table_window.content_edit
     put_cursor(table_window, 2, 11)
-    table_window.content_edit.insertPlainText("abelle")
-    qtbot.waitUntil(lambda: lines(table_window)[2] == "| Mon | Annabelle |", timeout=2000)
+    qtbot.keyClicks(editor, "abelle")
+    qtbot.waitUntil(lambda: lines(table_window)[0] == "| Day | Who       |", timeout=2000)
 
-    table_window.content_edit.undo()
-
+    qtbot.keyClick(editor, Qt.Key_Z, Qt.ControlModifier)
     assert lines(table_window)[:3] == ["| Day | Who |", "| --- | --- |", "| Mon | Ann |"]
+    qtbot.wait(150)  # the undone table is not aligned again, which would clear redo
+    assert lines(table_window)[0] == "| Day | Who |"
+
+    qtbot.keyClick(editor, Qt.Key_Y, Qt.ControlModifier)
+    assert lines(table_window)[:3] == [
+        "| Day | Who       |", "| --- | --------- |", "| Mon | Annabelle |"]
+    qtbot.keyClick(editor, Qt.Key_Z, Qt.ControlModifier)
+    assert lines(table_window)[2] == "| Mon | Ann |"
+
+
+def test_ctrl_y_redoes_outside_tables_too(qtbot, window):
+    editor = window.content_edit
+    editor.moveCursor(QTextCursor.End)
+    qtbot.keyClicks(editor, " more")
+
+    qtbot.keyClick(editor, Qt.Key_Z, Qt.ControlModifier)
+    assert not editor.toPlainText().endswith(" more")
+    qtbot.keyClick(editor, Qt.Key_Y, Qt.ControlModifier)
+    assert editor.toPlainText().endswith(" more")
 
 
 def test_ctrl_enter_adds_a_row_and_ctrl_shift_enter_a_column(table_window):
@@ -273,7 +292,7 @@ def test_ctrl_backspace_deletes_the_row_and_ctrl_shift_backspace_the_column(tabl
     assert lines(table_window)[0] == "| Who |"  # the last column stays
 
 
-def test_ctrl_space_in_a_box_turns_it_to_its_next_state(window):
+def test_ctrl_space_on_a_task_line_turns_its_box_to_the_next_state(window):
     window.set_markdown(True)
     put_cursor(window, 2, 3)  # between "[" and " "
 
@@ -282,6 +301,11 @@ def test_ctrl_space_in_a_box_turns_it_to_its_next_state(window):
         assert lines(window)[2] == expected
     assert cursor_place(window) == (2, 3)
 
-    put_cursor(window, 2, 8)  # in the task's text, not its box
+    put_cursor(window, 2, 9)  # at the end of the line
     key(window, Qt.Key_Space, Qt.ControlModifier)
-    assert lines(window)[2] == "- [ ] task"
+    assert lines(window)[2] == "- [v] task"
+    assert cursor_place(window) == (2, 9)
+
+    put_cursor(window, 1, 3)  # not a task
+    key(window, Qt.Key_Space, Qt.ControlModifier)
+    assert lines(window)[1] == "some **bold** text"

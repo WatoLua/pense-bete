@@ -23,7 +23,8 @@ The interface is in French or English, following the system language.
   launch.
 - In a note, Ctrl+L inserts a task (`- [ ] `), Ctrl+T a table, its first
   header selected; Ctrl+Shift+C copies the whole note, Ctrl+Delete clears it
-  (Ctrl+Z brings it back). These are also in the right-click menu.
+  (Ctrl+Z brings it back). These are also in the right-click menu. Ctrl+Y
+  redoes, as does Ctrl+Shift+Z.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and
@@ -39,14 +40,14 @@ The text stays exactly as typed, so unchecking the option loses nothing.
 
 - `- [ ]` is a task, for to-do lists and checklists alike: a click on its box
   turns it to `[v]`, ok, in green, its text struck through and faded, then to `[x]`, ko, in
-  red, then back to `[ ]`. Ctrl+Space does the same with the cursor in the
-  box, and the letter can be typed as well.
+  red, then back to `[ ]`. Ctrl+Space does the same from anywhere on the
+  task's line, and the letter can be typed as well.
 - Enter at the end of a list item starts the next one — same bullet, next
   number, a new unchecked box; Enter on an empty item ends the list.
 - A table (`| a | b |` lines) is shown in a fixed font. Its columns are aligned
   2 seconds after the typing pauses, and when the cursor leaves it; the cursor
   stays where it was in its cell, and Ctrl+Z takes back the typing and the
-  alignment together. In a table:
+  alignment together, Ctrl+Y brings both back. In a table:
   - Tab and Shift+Tab go to the next and previous cell; Tab in the last cell
     adds a row;
   - Ctrl+Enter adds a row below, Ctrl+Shift+Enter a column to the right;
