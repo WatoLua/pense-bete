@@ -32,9 +32,20 @@ info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m/!\\\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m%s\033[0m %s\n' "$(t "Error:" "Erreur :")" "$*" >&2; exit 1; }
 
+# Answers come from the terminal, since stdin is the script itself when piped into bash.
+# Without a terminal, the answer is empty and the default applies.
+ask() {  # ask "prompt" -> the answer
+    local answer=""
+    if { exec 3</dev/tty; } 2>/dev/null; then
+        read -r -p "$1" answer <&3 || true
+        exec 3<&-
+    fi
+    printf '%s' "$answer"
+}
+
 ask_yes() {  # ask_yes "question" -> true on yes, default yes
     local answer
-    read -r -p "$1 $(t "[Y/n]" "[O/n]") " answer </dev/tty
+    answer="$(ask "$1 $(t "[Y/n]" "[O/n]") ")"
     [[ -z "$answer" || "$answer" =~ ^[yYoO] ]]
 }
 
@@ -45,7 +56,11 @@ uninstall() {
         exec_line="$(grep -m1 '^Exec=' "$DESKTOP_FILE" || true)"
         install_dir="$(dirname "${exec_line#Exec=}")"
     fi
-    if [[ -n "$install_dir" && -f "$install_dir/pense_bete.py" ]]; then
+    # A git working copy is a clone the application was installed in place from: it is
+    # the user's own checkout, so only the menu entry and the command are removed.
+    if [[ -n "$install_dir" && -e "$install_dir/.git" ]]; then
+        warn "$(t "$install_dir is a git repository, it is kept." "$install_dir est un dépôt git, il est conservé.")"
+    elif [[ -n "$install_dir" && -f "$install_dir/pense_bete.py" ]]; then
         if ask_yes "$(t "Delete $install_dir?" "Supprimer $install_dir ?")"; then
             rm -rf -- "$install_dir"
         fi
@@ -85,7 +100,7 @@ install() {
     local target="${1:-}"
     check_dependencies
     if [[ -z "$target" ]]; then
-        read -r -p "$(t "Installation directory [$DEFAULT_DIR]: " "Dossier d'installation [$DEFAULT_DIR] : ")" target </dev/tty
+        target="$(ask "$(t "Installation directory [$DEFAULT_DIR]: " "Dossier d'installation [$DEFAULT_DIR] : ")")"
         target="${target:-$DEFAULT_DIR}"
     fi
     target="${target/#\~/$HOME}"
