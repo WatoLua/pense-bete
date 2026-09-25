@@ -180,3 +180,7 @@ notes, settings or menu entries of the machine. GitHub runs them on every push.
 `PENSE_BETE_REPO` points updates and the standalone installer at another
 repository, such as a fork. `QT_QPA_PLATFORM=wayland` runs the application
 under Wayland instead of XWayland.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
