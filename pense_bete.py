@@ -9,6 +9,8 @@ modification, and immediately when its window is closed.
 import json
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,8 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QByteArray, QDateTime, QLibraryInfo, QLocale, QProcess, QRect, QSize, Qt, QTimer,
-    QTranslator, Signal,
+    QByteArray, QDateTime, QLibraryInfo, QLocale, QProcess, QRect, QSize, QSocketNotifier, Qt,
+    QTimer, QTranslator, Signal,
 )
 from PySide6.QtGui import (
     QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
@@ -1251,6 +1253,28 @@ class MainWindow(QWidget):
             self.quit_app()
 
 
+def save_on_shutdown(app: QApplication, window: MainWindow) -> list:
+    """Save everything when the session ends or the process is told to stop.
+
+    Returns the objects that must stay alive for as long as the application runs.
+    """
+    # Before a logout, which may still be cancelled: save, but keep running.
+    app.commitDataRequest.connect(lambda _manager: (window.save_all(), window.save_session()))
+
+    # A stop signal, as a shutdown may send, quits the usual way, saving the notes.
+    # Python only runs signal handlers between its own instructions, never while Qt's
+    # event loop waits, so the signal also wakes that loop through a socket.
+    wakeup_read, wakeup_write = socket.socketpair()
+    wakeup_read.setblocking(False)
+    wakeup_write.setblocking(False)
+    signal.set_wakeup_fd(wakeup_write.fileno())
+    notifier = QSocketNotifier(wakeup_read.fileno(), QSocketNotifier.Read)
+    notifier.activated.connect(lambda: wakeup_read.recv(64))
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, lambda *_: window.quit_app())
+    return [wakeup_read, wakeup_write, notifier]
+
+
 def main() -> None:
     # X11, through XWayland in a Wayland session, lets windows be put back where they
     # were: Wayland leaves window positions to the compositor. Qt's xcb plugin needs
@@ -1288,6 +1312,7 @@ def main() -> None:
     window = MainWindow(NoteStore(DATA_DIR), Session(SESSION_FILE), server)
     window.restore_session()
     window.auto_update()
+    keep_alive = save_on_shutdown(app, window)  # referenced until exec returns
     sys.exit(app.exec())
 
 

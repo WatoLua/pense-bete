@@ -16,7 +16,8 @@ The interface is in French or English, following the system language.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and
-  immediately when their window is closed.
+  immediately when their window is closed, when the session ends, or when the
+  application is told to stop (as at shutdown).
 
 ### History
 
