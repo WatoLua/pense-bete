@@ -8,19 +8,22 @@ user's back: the note, its history and its differences stay those of the text ty
 import re
 
 import shiboken6
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import (
     QColor, QFont, QFontDatabase, QKeyEvent, QSyntaxHighlighter, QTextCharFormat, QTextCursor,
 )
 from PySide6.QtWidgets import QPlainTextEdit
+
+from . import tables
 
 HEADING = re.compile(r"^(#{1,6})(\s+)(.*)$")
 TASK = re.compile(r"^(\s*[-*+]\s+)\[([ xX])\](?=\s|$)")
 LIST_ITEM = re.compile(r"^(\s*)(?:([-*+])|(\d+)([.)]))(\s+)(\[[ xX]\]\s+)?")
 QUOTE = re.compile(r"^(\s*>+)")
 FENCE = re.compile(r"^\s*(```|~~~)")
-TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
-TABLE_SEPARATOR = re.compile(r"^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?\|?\s*$")
+# How long typing in a table pauses before its columns are aligned.
+TABLE_ALIGN_DELAY_MS = 2000
+END_OF_CELL = 1 << 30  # an offset past any cell's text
 # Inline spans: (pattern, marker length, format name). Code first, so that nothing
 # inside code is taken for emphasis.
 INLINE = (
@@ -87,9 +90,9 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         if in_code:
             self.setFormat(0, len(text), self._format("code"))
             return
-        if TABLE_ROW.match(text) or TABLE_SEPARATOR.match(text) and "|" in text:
+        if tables.is_table_line(text):
             self.setFormat(0, len(text), self._format("table"))
-            for match in re.finditer(r"\||(?<=\|)[\s:-]+(?=\|)" if TABLE_SEPARATOR.match(text)
+            for match in re.finditer(r"\||(?<=\|)[\s:-]+(?=\|)" if tables.is_separator(text)
                                      else r"\|", text):
                 self._merge(match.start(), match.end(), "marker")
             return
@@ -177,55 +180,27 @@ def continued_item(line: str) -> str | None:
     return f"{indent}{marker}{space}{'[ ] ' if box else ''}"
 
 
-def align_table(lines: list[str]) -> list[str]:
-    """The rows of a table with their cells padded to the width of each column."""
-    rows = [_cells(line) for line in lines]
-    separators = [TABLE_SEPARATOR.match(line) is not None for line in lines]
-    columns = max(len(row) for row in rows)
-    for row in rows:
-        row.extend([""] * (columns - len(row)))
-    widths = [max([3] + [len(row[column]) for row, separator in zip(rows, separators)
-                         if not separator]) for column in range(columns)]
-    indent = re.match(r"\s*", lines[0]).group()
-    aligned = []
-    for row, separator in zip(rows, separators):
-        if separator:
-            cells = [_separator_cell(cell, width) for cell, width in zip(row, widths)]
-        else:
-            cells = [cell.ljust(width) for cell, width in zip(row, widths)]
-        aligned.append(f"{indent}| {' | '.join(cells)} |")
-    return aligned
-
-
-def _cells(line: str) -> list[str]:
-    body = line.strip()
-    body = body[1:] if body.startswith("|") else body
-    body = body[:-1] if body.endswith("|") and not body.endswith("\\|") else body
-    return [cell.strip() for cell in re.split(r"(?<!\\)\|", body)]
-
-
-def _separator_cell(cell: str, width: int) -> str:
-    left, right = cell.startswith(":"), cell.endswith(":")
-    return f"{':' if left else '-'}{'-' * (width - 2)}{':' if right else '-'}"
-
-
-def is_table_line(text: str) -> bool:
-    return bool(TABLE_ROW.match(text) or (TABLE_SEPARATOR.match(text) and "|" in text))
-
-
 class MarkdownEditing(QObject):
-    """What typing and clicking do in Markdown: tasks toggle on a click, Enter continues
-    a list, and a table is aligned once the cursor leaves it."""
+    """What typing and clicking do in Markdown: tasks toggle on a click, Enter continues a
+    list, and tables keep their columns aligned and take rows and columns on demand."""
 
     def __init__(self, editor: QPlainTextEdit):
         super().__init__(editor)
         self.editor = editor
         self.enabled = False
-        self.table_block = None  # the first line of the table the cursor is in
+        # The number of the first line of the table the cursor is in, None outside tables.
+        self.table_start: int | None = None
+        self.replacing = False  # while a table is being rewritten
         editor.installEventFilter(self)
         editor.viewport().installEventFilter(self)
         editor.viewport().setMouseTracking(True)
         editor.cursorPositionChanged.connect(self._on_cursor_moved)
+        # A table being typed in is aligned once the typing pauses.
+        self.align_timer = QTimer(self)
+        self.align_timer.setSingleShot(True)
+        self.align_timer.setInterval(TABLE_ALIGN_DELAY_MS)
+        self.align_timer.timeout.connect(self._align_current)
+        editor.document().contentsChange.connect(self._on_contents_change)
 
     def eventFilter(self, watched, event) -> bool:
         # The viewport still sends events while the editor is being destroyed.
@@ -242,8 +217,8 @@ class MarkdownEditing(QObject):
                 if checkbox is not None and not event.modifiers():
                     toggle_checkbox(*checkbox)
                     return True
-        elif event.type() == QEvent.KeyPress and self._continue_list(event):
-            return True
+        elif event.type() == QEvent.KeyPress:
+            return self._table_key(event) or self._continue_list(event)
         return False
 
     def _continue_list(self, event: QKeyEvent) -> bool:
@@ -265,37 +240,161 @@ class MarkdownEditing(QObject):
         self.editor.setTextCursor(cursor)
         return True
 
+    def _table_key(self, event: QKeyEvent) -> bool:
+        """Tab and Shift+Tab move between cells, Ctrl+Enter adds a row, Ctrl+Shift+Enter a
+        column; elsewhere than in a table, these keys do what they usually do."""
+        if self.table() is None:
+            return False
+        key, modifiers = event.key(), event.modifiers() & ~Qt.KeypadModifier
+        enter = key in (Qt.Key_Return, Qt.Key_Enter)
+        if key == Qt.Key_Tab and not modifiers:
+            self.move_to_cell(1)
+        elif key == Qt.Key_Backtab:
+            self.move_to_cell(-1)
+        elif enter and modifiers == Qt.ControlModifier:
+            self.insert_row()
+        elif enter and modifiers == Qt.ControlModifier | Qt.ShiftModifier:
+            self.insert_column()
+        else:
+            return False
+        return True
+
+    def table(self, cursor: QTextCursor | None = None):
+        """The table at a cursor, the editor's by default: (number of its first line, its
+        lines, the row, cell and offset in the cell of the cursor), None outside tables."""
+        cursor = cursor or self.editor.textCursor()
+        block = cursor.block()
+        first = _table_start(block)
+        if first is None:
+            return None
+        lines = _table_lines(first)
+        row = block.blockNumber() - first.blockNumber()
+        cell, offset = tables.cell_at(block.text(), cursor.positionInBlock())
+        return first.blockNumber(), lines, row, max(cell, 0), offset
+
+    def insert_row(self) -> None:
+        start, lines, row, cell, offset = self.table()
+        new_lines, new_row = tables.insert_row(lines, row)
+        self._replace(start, len(lines), new_lines, (new_row, 0, 0))
+
+    def insert_column(self) -> None:
+        start, lines, row, cell, offset = self.table()
+        self._replace(start, len(lines), tables.insert_column(lines, cell), (row, cell + 1, 0))
+
+    def can_delete_row(self) -> bool:
+        table = self.table()
+        return table is not None and tables.can_delete_row(table[1], table[2])
+
+    def delete_row(self) -> None:
+        start, lines, row, cell, offset = self.table()
+        new_lines = tables.delete_row(lines, row)
+        self._replace(start, len(lines), new_lines, (min(row, len(new_lines) - 1), cell, 0))
+
+    def can_delete_column(self) -> bool:
+        table = self.table()
+        return table is not None and tables.can_delete_column(table[1])
+
+    def delete_column(self) -> None:
+        start, lines, row, cell, offset = self.table()
+        new_lines = tables.delete_column(lines, cell)
+        columns = tables.column_count(new_lines)
+        self._replace(start, len(lines), new_lines, (row, min(cell, columns - 1), 0))
+
+    def move_to_cell(self, step: int) -> None:
+        """To the next cell, or the previous one for a negative step, past the separator;
+        from the last cell, to a new row. The cursor lands at the end of the cell's text."""
+        start, lines, row, cell, offset = self.table()
+        columns = tables.column_count(lines)
+        position = row * columns + cell
+        while True:
+            position += step
+            row, cell = divmod(position, columns)
+            if position < 0:
+                return
+            if row >= len(lines):
+                new_lines, new_row = tables.insert_row(lines, len(lines) - 1)
+                self._replace(start, len(lines), new_lines, (new_row, 0, 0))
+                return
+            if not tables.is_separator(lines[row]):
+                break
+        self._replace(start, len(lines), tables.align_table(lines), (row, cell, END_OF_CELL))
+
+    def _on_contents_change(self, _position: int, _removed: int, _added: int) -> None:
+        # Also emitted when the highlighting repaints: aligning an aligned table does nothing.
+        if self.enabled and not self.replacing and self.table_start is not None:
+            self.align_timer.start()
+
+    def _align_current(self) -> None:
+        """Align the table being typed in, the cursor staying where it is in its cell."""
+        table = self.table() if self.enabled else None
+        if table is None or self.editor.textCursor().hasSelection():
+            return
+        start, lines, row, cell, offset = table
+        aligned = tables.align_table(lines, keep=(row, cell, offset))
+        if aligned != lines:
+            self._replace(start, len(lines), aligned, (row, cell, offset), join=True)
+
     def _on_cursor_moved(self) -> None:
-        start = _table_start(self.editor.textCursor().block()) if self.enabled else None
-        # Updated before aligning, which moves the cursor again.
-        left, self.table_block = self.table_block, start
+        if self.replacing:
+            return
+        first = _table_start(self.editor.textCursor().block()) if self.enabled else None
+        start = first.blockNumber() if first is not None else None
+        left, self.table_start = self.table_start, start
         if left is not None and left != start:
+            self.align_timer.stop()
             self._align(left)
 
-    def _align(self, first) -> None:
-        if not first.isValid() or not is_table_line(first.text()):
+    def _align(self, number: int) -> None:
+        """Align the table that starts at a line, once the cursor has left it."""
+        first = _table_start(self.editor.document().findBlockByNumber(number))
+        if first is None:
             return
-        blocks = []
-        block = first
-        while block.isValid() and is_table_line(block.text()):
-            blocks.append(block)
-            block = block.next()
-        lines = [block.text() for block in blocks]
-        aligned = align_table(lines)
-        if aligned == lines:
-            return
-        # The editor's own cursor, below the table, follows the edit by itself.
+        lines = _table_lines(first)
+        aligned = tables.align_table(lines)
+        if aligned != lines:
+            self._replace(first.blockNumber(), len(lines), aligned, None, join=True)
+
+    def _replace(self, start: int, count: int, lines: list[str],
+                 target: tuple[int, int, int] | None, join: bool = False) -> None:
+        """Put new lines in place of a table's, then the cursor at (row, cell, offset).
+
+        Aligning joins the edit it follows, so that undo takes back the typing and the
+        alignment together, rather than the alignment alone, which would come back.
+        Without a target, the editor's cursor, outside the table, follows by itself.
+        """
+        document = self.editor.document()
+        first, last = document.findBlockByNumber(start), document.findBlockByNumber(start + count - 1)
         cursor = QTextCursor(first)
-        cursor.beginEditBlock()
-        cursor.setPosition(blocks[-1].position() + len(blocks[-1].text()), QTextCursor.KeepAnchor)
-        cursor.insertText("\n".join(aligned))
-        cursor.endEditBlock()
+        self.replacing = True
+        try:
+            cursor.joinPreviousEditBlock() if join else cursor.beginEditBlock()
+            cursor.setPosition(last.position() + len(last.text()), QTextCursor.KeepAnchor)
+            cursor.insertText("\n".join(lines))
+            cursor.endEditBlock()
+            if target is not None:
+                row, cell, offset = target
+                block = document.findBlockByNumber(start + row)
+                moved = QTextCursor(block)
+                moved.setPosition(block.position() + tables.cell_column(lines[row], cell, offset))
+                self.editor.setTextCursor(moved)
+        finally:
+            self.replacing = False
+        self._on_cursor_moved()
 
 
 def _table_start(block):
     """The first line of the table a line belongs to, None outside tables."""
-    if not is_table_line(block.text()):
+    if not block.isValid() or not tables.is_table_line(block.text()):
         return None
-    while block.previous().isValid() and is_table_line(block.previous().text()):
+    while block.previous().isValid() and tables.is_table_line(block.previous().text()):
         block = block.previous()
     return block
+
+
+def _table_lines(first) -> list[str]:
+    lines = []
+    block = first
+    while block.isValid() and tables.is_table_line(block.text()):
+        lines.append(block.text())
+        block = block.next()
+    return lines

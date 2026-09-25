@@ -312,7 +312,26 @@ class NoteWindow(QWidget):
             self.history.select(self.history.combo.currentIndex())
 
     def _show_context_menu(self, position) -> None:
+        editing = self.markdown_editing
+        clicked = self.content_edit.cursorForPosition(position)
+        # The table actions work at the text cursor: it goes where the click was, unless
+        # a selection is being kept for copying.
+        if self.markdown and not self.content_edit.textCursor().hasSelection() \
+                and editing.table(clicked) is not None:
+            self.content_edit.setTextCursor(clicked)
         menu = self.content_edit.createStandardContextMenu()
+        if self.markdown and editing.table() is not None:
+            menu.addSeparator()
+            for label, shortcut, action, enabled in (
+                    ("table_insert_row", "Ctrl+Return", editing.insert_row, True),
+                    ("table_insert_column", "Ctrl+Shift+Return", editing.insert_column, True),
+                    ("table_delete_row", None, editing.delete_row, editing.can_delete_row()),
+                    ("table_delete_column", None, editing.delete_column,
+                     editing.can_delete_column())):
+                item = menu.addAction(tr(label), action)
+                item.setEnabled(enabled)
+                if shortcut:  # shown in the menu; the editor handles the keys itself
+                    item.setShortcut(QKeySequence(shortcut))
         if self.markdown:
             menu.addSeparator()
             menu.addAction(tr("insert_tasks"), lambda: self._insert_block(TASKS_TEMPLATE))

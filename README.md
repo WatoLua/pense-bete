@@ -38,8 +38,14 @@ The text stays exactly as typed, so unchecking the option loses nothing.
   struck through.
 - Enter at the end of a list item starts the next one — same bullet, next
   number, a new unchecked box; Enter on an empty item ends the list.
-- A table (`| a | b |` lines) is shown in a fixed font, and its columns are
-  aligned when the cursor leaves it.
+- A table (`| a | b |` lines) is shown in a fixed font. Its columns are aligned
+  2 seconds after the typing pauses, and when the cursor leaves it; the cursor
+  stays where it was in its cell, and Ctrl+Z takes back the typing and the
+  alignment together. In a table:
+  - Tab and Shift+Tab go to the next and previous cell; Tab in the last cell
+    adds a row;
+  - Ctrl+Enter adds a row below, Ctrl+Shift+Enter a column to the right;
+  - the right-click menu also adds rows and columns, and deletes them.
 - The right-click menu inserts a task list or a table.
 
 ### History
