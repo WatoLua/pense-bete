@@ -14,12 +14,12 @@ FILES=(pense_bete.py pense-bete icon.svg requirements.txt install.sh)
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m/!\\\033[0m %s\n' "$*" >&2; }
-fail() { printf '\033[1;31mErreur :\033[0m %s\n' "$*" >&2; exit 1; }
+fail() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
 ask_yes() {  # ask_yes "question" -> true on yes, default yes
     local answer
-    read -r -p "$1 [O/n] " answer
-    [[ -z "$answer" || "$answer" =~ ^[oOyY] ]]
+    read -r -p "$1 [Y/n] " answer
+    [[ -z "$answer" || "$answer" =~ ^[yY] ]]
 }
 
 uninstall() {
@@ -30,38 +30,38 @@ uninstall() {
         install_dir="$(dirname "${exec_line#Exec=}")"
     fi
     if [[ -n "$install_dir" && -f "$install_dir/pense_bete.py" ]]; then
-        if ask_yes "Supprimer $install_dir ?"; then
+        if ask_yes "Delete $install_dir?"; then
             rm -rf -- "$install_dir"
         fi
     fi
     rm -f -- "$DESKTOP_FILE"
     [[ -L "$BIN_LINK" ]] && rm -f -- "$BIN_LINK"
     command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" || true
-    info "Pense-bête est désinstallé. Les post-its sont conservés dans ~/.local/share/pense-bete."
+    info "Pense-bête is uninstalled. Notes are kept in ~/.local/share/pense-bete."
 }
 
 check_dependencies() {
-    command -v python3 >/dev/null || fail "python3 est introuvable, installez-le d'abord."
-    command -v git >/dev/null || fail "git est introuvable, installez-le d'abord (il versionne les post-its)."
+    command -v python3 >/dev/null || fail "python3 not found, please install it first."
+    command -v git >/dev/null || fail "git not found, please install it first (it versions the notes)."
 
     if python3 -c "import PySide6" 2>/dev/null; then
         return
     fi
-    warn "La bibliothèque PySide6 n'est pas installée."
-    if ask_yes "L'installer maintenant avec pip ?"; then
+    warn "The PySide6 library is not installed."
+    if ask_yes "Install it now with pip?"; then
         if python3 -m pip install --user -r "$SOURCE_DIR/requirements.txt"; then
             return
         fi
-        warn "L'installation avec pip a échoué."
+        warn "Installation with pip failed."
     fi
-    fail "Installez PySide6-Essentials (pip install PySide6-Essentials) puis relancez ce script."
+    fail "Install PySide6-Essentials (pip install PySide6-Essentials), then run this script again."
 }
 
 install() {
     local target="${1:-}"
     check_dependencies
     if [[ -z "$target" ]]; then
-        read -r -p "Dossier d'installation [$DEFAULT_DIR] : " target
+        read -r -p "Installation directory [$DEFAULT_DIR]: " target
         target="${target:-$DEFAULT_DIR}"
     fi
     target="${target/#\~/$HOME}"
@@ -70,22 +70,22 @@ install() {
 
     if [[ "$target" != "$SOURCE_DIR" ]]; then
         if [[ -n "$(ls -A "$target")" && ! -f "$target/pense_bete.py" ]]; then
-            ask_yes "$target n'est pas vide, installer quand même ?" || fail "Installation annulée."
+            ask_yes "$target is not empty, install anyway?" || fail "Installation cancelled."
         fi
-        info "Copie des fichiers dans $target"
+        info "Copying files to $target"
         for file in "${FILES[@]}"; do
             cp -- "$SOURCE_DIR/$file" "$target/"
         done
     fi
     chmod +x "$target/pense-bete" "$target/pense_bete.py" "$target/install.sh"
 
-    info "Ajout de l'entrée dans le menu des applications"
+    info "Adding the entry to the applications menu"
     mkdir -p -- "$(dirname "$DESKTOP_FILE")"
     cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Pense-bête
-Comment=Post-its versionnés avec git
+Comment=Sticky notes versioned with git
 Exec=$target/pense-bete
 Icon=$target/icon.svg
 Terminal=false
@@ -100,10 +100,10 @@ EOF
         ln -sfn -- "$target/pense-bete" "$BIN_LINK"
     fi
 
-    info "Pense-bête est installé dans $target"
-    echo "    Lancez-le depuis le menu des applications (cherchez « Pense-bête »)"
-    echo "    ou avec la commande : $APP_ID"
-    echo "    Désinstallation : $target/install.sh --uninstall"
+    info "Pense-bête is installed in $target"
+    echo "    Launch it from the applications menu (search for \"Pense-bête\")"
+    echo "    or with the command: $APP_ID"
+    echo "    To uninstall: $target/install.sh --uninstall"
 }
 
 case "${1:-}" in
