@@ -3,15 +3,17 @@
 import subprocess
 import sys
 import threading
+import unicodedata
 import uuid
 
 from PySide6.QtCore import QProcess, Qt, Signal
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QHBoxLayout,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -35,6 +37,12 @@ from .trash import TrashDialog
 from .updates import can_update, command_error, install_release, run_command, update_available
 
 
+def searchable(text: str) -> str:
+    """The text folded for searching: case and accents do not count, "é" matches "e"."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
 class MainWindow(QWidget):
     auto_updated = Signal()  # emitted from the update thread, handled in the interface one
 
@@ -47,6 +55,14 @@ class MainWindow(QWidget):
         self.windows: dict[str, NoteWindow] = {}
         self.quitting = False
         server.newConnection.connect(self._on_other_instance)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(tr("search"))
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(lambda _text: self.refresh_list())
+        self.search.returnPressed.connect(self._open_first_match)
+        QShortcut(QKeySequence.Find, self, self._focus_search)
+        QShortcut(QKeySequence(Qt.Key_Escape), self.search, self.search.clear)
 
         self.list = QListWidget()
         self.list.itemActivated.connect(lambda item: self.open_note(item.data(Qt.UserRole)))
@@ -98,6 +114,7 @@ class MainWindow(QWidget):
         buttons.addWidget(delete_button)
         buttons.addWidget(options_button)
         layout = QVBoxLayout(self)
+        layout.addWidget(self.search)
         layout.addWidget(self.list)
         layout.addLayout(buttons)
 
@@ -115,11 +132,28 @@ class MainWindow(QWidget):
     def retention_days(self) -> int:
         return self.session.get("retention_days", DEFAULT_RETENTION_DAYS)
 
+    def _focus_search(self) -> None:
+        self.search.setFocus()
+        self.search.selectAll()
+
+    def _open_first_match(self) -> None:
+        if self.list.count() and self.list.item(0).data(Qt.UserRole):
+            self.open_note(self.list.item(0).data(Qt.UserRole))
+
+    def _matches(self, note: Note, words: list[str]) -> bool:
+        """Whether every word of the search is in the note's title or text."""
+        window = self.windows.get(note.id)
+        # An open note is searched as it is on screen, saved or not.
+        content = window.content_edit.toPlainText() if window is not None else note.content
+        text = searchable(f"{note.title}\n{content}")
+        return all(word in text for word in words)
+
     def refresh_list(self) -> None:
         selected = self.list.currentItem().data(Qt.UserRole) if self.list.currentItem() else None
         self.list.clear()
+        words = searchable(self.search.text()).split()
         for note in self.notes:
-            if note.deleted:
+            if note.deleted or not self._matches(note, words):
                 continue
             item = QListWidgetItem(note.display_title)
             item.setData(Qt.UserRole, note.id)
@@ -207,6 +241,7 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, APP_NAME, tr("create_failed", error=error))
             return
         self.notes.append(note)
+        self.search.clear()  # the new note, empty, would not match
         self.refresh_list()
         self.list.setCurrentRow(self.list.count() - 1)
         self.open_note(note.id)

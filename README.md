@@ -11,6 +11,9 @@ The interface is in French or English, following the system language.
 
 - **New** creates a note, **Delete** moves the selected one to the deleted
   notes; double-click a note to open it.
+- The search field above the list (Ctrl+F) keeps the notes whose title or text
+  holds every word typed, whatever the case and accents: "reunion" finds
+  "Réunion". Enter opens the first note found, Escape clears the search.
 - A note's title and color (seven presets, or any color with **Other…**) are
   shown in the list.
 - The 📌 button keeps a note above the other windows; the pin stands upright

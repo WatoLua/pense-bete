@@ -21,6 +21,7 @@ TRANSLATIONS = {
     "green": {"en": "Green", "fr": "Vert"},
     "grey": {"en": "Grey", "fr": "Gris"},
     "new": {"en": "New", "fr": "Nouveau"},
+    "search": {"en": "Search (Ctrl+F)", "fr": "Rechercher (Ctrl+F)"},
     "delete": {"en": "Delete", "fr": "Supprimer"},
     "confirm_delete": {
         "en": "Delete the note “{title}”?\nIt stays {days} days among the deleted notes.",

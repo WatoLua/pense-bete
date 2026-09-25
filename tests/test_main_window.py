@@ -162,3 +162,59 @@ def test_a_copy_of_a_version_becomes_a_new_note(main_window, store):
 
     copies = [n for n in store.load_all() if n.id != source.note.id]
     assert [(n.title, n.content) for n in copies] == [("Source", "old text")]
+
+
+def add_note(window, store, note_id, title, content):
+    note = Note(note_id, title, content=content, created=f"2026-01-0{len(window.notes) + 1}")
+    store.save(note, "Create")
+    window.notes.append(note)
+    window.refresh_list()
+    return note
+
+
+def test_the_search_filters_titles_and_contents(main_window, store):
+    add_note(main_window, store, "a", "Courses", "lait, œufs, farine")
+    add_note(main_window, store, "b", "Réunion", "ordre du jour")
+    add_note(main_window, store, "c", "Idées", "une réunion de famille")
+
+    main_window.search.setText("reunion")
+    assert listed(main_window) == ["Réunion", "Idées"]
+
+    main_window.search.setText("REUNION famille")
+    assert listed(main_window) == ["Idées"]
+
+    main_window.search.setText("ŒUFS")
+    assert listed(main_window) == ["Courses"]
+
+    main_window.search.clear()
+    assert listed(main_window) == ["Courses", "Réunion", "Idées"]
+
+
+def test_an_open_note_is_searched_as_it_is_on_screen(main_window, store):
+    add_note(main_window, store, "a", "Note", "saved text")
+    main_window.open_note("a")
+    main_window.windows["a"].content_edit.setPlainText("typed but not saved yet")
+
+    main_window.search.setText("typed")
+
+    assert listed(main_window) == ["Note"]
+
+
+def test_enter_in_the_search_opens_the_first_match(main_window, store):
+    add_note(main_window, store, "a", "One", "")
+    add_note(main_window, store, "b", "Two", "")
+    main_window.search.setText("two")
+
+    main_window.search.returnPressed.emit()
+
+    assert list(main_window.windows) == ["b"]
+
+
+def test_a_new_note_clears_the_search(main_window, store):
+    add_note(main_window, store, "a", "One", "")
+    main_window.search.setText("nothing matches this")
+
+    main_window.create_note()
+
+    assert main_window.search.text() == ""
+    assert len(listed(main_window)) == 2
