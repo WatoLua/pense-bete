@@ -13,7 +13,7 @@ import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QSystemTrayIcon,
     QToolButton,
@@ -57,6 +59,7 @@ SESSION_FILE = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_ID / "session.json"
 )
 RECENT_NOTES = 3
+DEFAULT_RETENTION_DAYS = 30
 ICON_PATH = APP_DIR / ("icon-dev.svg" if DEV_MODE else "icon.svg")
 # Written by install.sh: the installed commit of the repository.
 VERSION_FILE = APP_DIR / ".version"
@@ -91,8 +94,21 @@ TRANSLATIONS = {
     "grey": {"en": "Grey", "fr": "Gris"},
     "new": {"en": "New", "fr": "Nouveau"},
     "delete": {"en": "Delete", "fr": "Supprimer"},
-    "confirm_delete": {"en": "Delete the note “{title}”?",
-                       "fr": "Supprimer le post-it « {title} » ?"},
+    "confirm_delete": {
+        "en": "Delete the note “{title}”?\nIt stays {days} days among the deleted notes.",
+        "fr": "Supprimer le post-it « {title} » ?\nIl reste {days} jours dans les post-its supprimés."},
+    "deleted_notes": {"en": "Deleted notes…", "fr": "Post-its supprimés…"},
+    "trash_title": {"en": "Deleted notes", "fr": "Post-its supprimés"},
+    "trash_empty": {"en": "No deleted notes.", "fr": "Aucun post-it supprimé."},
+    "trash_item": {"en": "{title} — deleted {date}, erased in {days} d",
+                   "fr": "{title} — supprimé le {date}, effacé dans {days} j"},
+    "retention_before": {"en": "Erase deleted notes after", "fr": "Effacer les post-its supprimés après"},
+    "retention_after": {"en": "days", "fr": "jours"},
+    "restore": {"en": "Restore", "fr": "Restaurer"},
+    "erase": {"en": "Erase permanently", "fr": "Supprimer définitivement"},
+    "confirm_erase": {"en": "Erase the note “{title}” permanently?",
+                      "fr": "Supprimer définitivement le post-it « {title} » ?"},
+    "close": {"en": "Close", "fr": "Fermer"},
     "save_failed": {"en": "Could not save the note:\n{error}",
                     "fr": "Échec de la sauvegarde :\n{error}"},
     "create_failed": {"en": "Could not create the note:\n{error}",
@@ -236,12 +252,17 @@ class Version:
 
 class Note:
     def __init__(self, note_id: str, title: str = "", color: str = DEFAULT_COLOR,
-                 content: str = "", created: str | None = None):
+                 content: str = "", created: str | None = None, deleted: str | None = None):
         self.id = note_id
         self.title = title
         self.color = color
         self.content = content
         self.created = created or datetime.now().isoformat(timespec="seconds")
+        # When the note was deleted: it stays in the trash, restorable, until it expires.
+        self.deleted = deleted
+
+    def days_in_trash(self) -> int:
+        return (datetime.now() - datetime.fromisoformat(self.deleted)).days if self.deleted else 0
 
     @property
     def filename(self) -> str:
@@ -252,13 +273,16 @@ class Note:
         return self.title.strip() or tr("untitled")
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "title": self.title, "color": self.color,
+        data = {"id": self.id, "title": self.title, "color": self.color,
                 "content": self.content, "created": self.created}
+        if self.deleted:
+            data["deleted"] = self.deleted
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "Note":
         return cls(data["id"], data.get("title", ""), data.get("color", DEFAULT_COLOR),
-                   data.get("content", ""), data.get("created"))
+                   data.get("content", ""), data.get("created"), data.get("deleted"))
 
 
 class NoteStore:
@@ -295,9 +319,27 @@ class NoteStore:
                                     data.get("color", DEFAULT_COLOR), data.get("content", "")))
         return versions
 
-    def delete(self, note: Note) -> None:
+    def trash(self, note: Note) -> None:
+        """Delete the note, restorably: its file stays, marked with the deletion time."""
+        note.deleted = datetime.now().isoformat(timespec="seconds")
+        try:
+            self.save(note, f'Delete "{note.display_title}"')
+        except (OSError, subprocess.CalledProcessError):
+            note.deleted = None
+            raise
+
+    def untrash(self, note: Note) -> None:
+        deleted, note.deleted = note.deleted, None
+        try:
+            self.save(note, f'Restore "{note.display_title}" from the deleted notes')
+        except (OSError, subprocess.CalledProcessError):
+            note.deleted = deleted
+            raise
+
+    def erase(self, note: Note) -> None:
+        """Remove the note from the application; its past versions stay in the git history."""
         (self.path / note.filename).unlink(missing_ok=True)
-        self.git.commit_file(note.filename, f'Delete "{note.display_title}"')
+        self.git.commit_file(note.filename, f'Erase "{note.display_title}"')
 
 
 class Session:
@@ -629,6 +671,105 @@ class NoteWindow(QWidget):
         super().closeEvent(event)
 
 
+class TrashDialog(QDialog):
+    """The deleted notes, to restore or erase, and how long they are kept."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle(tr("trash_title"))
+        self.resize(460, 360)
+
+        self.list = QListWidget()
+        self.list.itemActivated.connect(lambda _item: self.restore_selected())
+        self.list.currentItemChanged.connect(lambda *_: self._update_buttons())
+
+        self.days = QSpinBox()
+        self.days.setRange(1, 3650)
+        self.days.setValue(main.retention_days())
+        # Only recorded: erasing waits for the next check, so that typing a number
+        # never erases notes on the way through a smaller one.
+        self.days.valueChanged.connect(self._set_retention)
+        retention = QHBoxLayout()
+        retention.addWidget(QLabel(tr("retention_before")))
+        retention.addWidget(self.days)
+        retention.addWidget(QLabel(tr("retention_after")))
+        retention.addStretch()
+
+        self.restore_button = QPushButton(tr("restore"))
+        self.restore_button.clicked.connect(self.restore_selected)
+        self.erase_button = QPushButton(tr("erase"))
+        self.erase_button.clicked.connect(self.erase_selected)
+        close_button = QPushButton(tr("close"))
+        close_button.clicked.connect(self.close)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.restore_button)
+        buttons.addWidget(self.erase_button)
+        buttons.addStretch()
+        buttons.addWidget(close_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.list)
+        layout.addLayout(retention)
+        layout.addLayout(buttons)
+        self.refresh()
+
+    def _set_retention(self, days: int) -> None:
+        self.main.session.set("retention_days", days)
+        self.main.session.write()
+        self.refresh()
+
+    def refresh(self) -> None:
+        selected = self.list.currentItem().data(Qt.UserRole) if self.list.currentItem() else None
+        self.list.clear()
+        notes = sorted(self.main.deleted_notes(), key=lambda note: note.deleted, reverse=True)
+        for note in notes:
+            date = QLocale().toString(QDateTime.fromString(note.deleted, Qt.ISODate).date(),
+                                      QLocale.FormatType.ShortFormat)
+            days = max(self.days.value() - note.days_in_trash(), 0)
+            item = QListWidgetItem(tr("trash_item", title=note.display_title, date=date, days=days))
+            item.setData(Qt.UserRole, note.id)
+            item.setBackground(QColor(note.color))
+            item.setForeground(QColor(text_color_for(note.color)))
+            item.setToolTip(note.content[:500])
+            self.list.addItem(item)
+            if note.id == selected:
+                self.list.setCurrentItem(item)
+        if not notes:
+            item = QListWidgetItem(tr("trash_empty"))
+            item.setFlags(Qt.NoItemFlags)
+            self.list.addItem(item)
+        elif self.list.currentItem() is None:
+            self.list.setCurrentRow(0)
+        self._update_buttons()
+
+    def _selected(self) -> Note | None:
+        item = self.list.currentItem()
+        note_id = item.data(Qt.UserRole) if item else None
+        return next((n for n in self.main.deleted_notes() if n.id == note_id), None)
+
+    def _update_buttons(self) -> None:
+        enabled = self._selected() is not None
+        self.restore_button.setEnabled(enabled)
+        self.erase_button.setEnabled(enabled)
+
+    def restore_selected(self) -> None:
+        note = self._selected()
+        if note is not None:
+            self.main.restore_note(note)
+            self.refresh()
+
+    def erase_selected(self) -> None:
+        note = self._selected()
+        if note is None:
+            return
+        if QMessageBox.question(self, tr("erase"), tr("confirm_erase", title=note.display_title)
+                                ) != QMessageBox.Yes:
+            return
+        self.main.erase_note(note)
+        self.refresh()
+
+
 class MainWindow(QWidget):
     def __init__(self, store: NoteStore, session: Session, server: QLocalServer):
         super().__init__()
@@ -660,6 +801,8 @@ class MainWindow(QWidget):
         self.background_action.setChecked(session.get("background", False))
         self.background_action.toggled.connect(self._set_background)
         options_menu.addSeparator()
+        options_menu.addAction(tr("deleted_notes"), self.open_trash)
+        options_menu.addSeparator()
         options_menu.addAction(tr("update"), self.update_app)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
         options_menu.addSeparator()
@@ -687,12 +830,21 @@ class MainWindow(QWidget):
         self.refresh_list()
 
     def _note_by_id(self, note_id: str) -> Note | None:
-        return next((note for note in self.notes if note.id == note_id), None)
+        """A note that is not deleted."""
+        return next((note for note in self.notes if note.id == note_id and not note.deleted), None)
+
+    def deleted_notes(self) -> list[Note]:
+        return [note for note in self.notes if note.deleted]
+
+    def retention_days(self) -> int:
+        return self.session.get("retention_days", DEFAULT_RETENTION_DAYS)
 
     def refresh_list(self) -> None:
         selected = self.list.currentItem().data(Qt.UserRole) if self.list.currentItem() else None
         self.list.clear()
         for note in self.notes:
+            if note.deleted:
+                continue
             item = QListWidgetItem(note.display_title)
             item.setData(Qt.UserRole, note.id)
             item.setBackground(QColor(note.color))
@@ -744,6 +896,7 @@ class MainWindow(QWidget):
 
     def restore_session(self) -> None:
         """Reopen the windows that were open when the application last quit."""
+        self.erase_expired()
         geometry = self.session.geometry("main")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -815,22 +968,51 @@ class MainWindow(QWidget):
         if item is None:
             return
         note = self._note_by_id(item.data(Qt.UserRole))
-        answer = QMessageBox.question(
-            self, tr("delete"), tr("confirm_delete", title=note.display_title)
-        )
+        answer = QMessageBox.question(self, tr("delete"), tr(
+            "confirm_delete", title=note.display_title, days=self.retention_days()))
         if answer != QMessageBox.Yes:
             return
-        window = self.windows.pop(note.id, None)
+        window = self.windows.get(note.id)
         if window is not None:
-            window.discard()
+            window.save()  # its last edits belong to what a restore brings back
         try:
-            self.store.delete(note)
+            self.store.trash(note)
         except (OSError, subprocess.CalledProcessError) as error:
             QMessageBox.warning(self, APP_NAME, tr("delete_failed", error=error))
-        self.notes.remove(note)
+            return
+        if window is not None:
+            self.windows.pop(note.id)
+            window.discard()
         self.session.forget(note.id)
         self.refresh_list()
         self.save_session()
+
+    def restore_note(self, note: Note) -> None:
+        try:
+            self.store.untrash(note)
+        except (OSError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("save_failed", error=error))
+            return
+        self.refresh_list()
+        self.open_note(note.id)
+
+    def erase_note(self, note: Note) -> None:
+        try:
+            self.store.erase(note)
+        except (OSError, subprocess.CalledProcessError) as error:
+            QMessageBox.warning(self, APP_NAME, tr("delete_failed", error=error))
+            return
+        self.notes.remove(note)
+
+    def erase_expired(self) -> None:
+        """Erase the deleted notes kept longer than the retention delay."""
+        for note in self.deleted_notes():
+            if note.days_in_trash() >= self.retention_days():
+                self.erase_note(note)
+
+    def open_trash(self) -> None:
+        self.erase_expired()
+        TrashDialog(self).exec()
 
     def save_all(self) -> None:
         for window in self.windows.values():

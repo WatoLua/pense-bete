@@ -11,6 +11,10 @@ opens in its own window, with a title, a color and free text.
   picked from a dated list or browsed with the arrows (Alt+← / Alt+→). A
   version can replace the current note, which stays in the history, or be
   copied into a new note.
+- Deleted notes can be restored from **Deleted notes…** in the **⋮** menu,
+  with their history. They are erased after a delay chosen there (30 days by
+  default), checked at launch and when that list opens. Erased notes remain in
+  the git history of the notes repository.
 - The open windows are restored at the next launch.
 - With **Keep running in the background when closed** (in the **⋮** menu),
   closing the list leaves the notes open and the application running, with an
