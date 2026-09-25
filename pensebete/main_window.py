@@ -32,7 +32,7 @@ from .session import Session
 from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
-from .updates import can_update, command_error, install_latest, run_command, update_available
+from .updates import can_update, command_error, install_release, run_command, update_available
 
 
 class MainWindow(QWidget):
@@ -313,13 +313,15 @@ class MainWindow(QWidget):
             QMessageBox.information(self, APP_NAME, tr("update_from_clone", path=APP_DIR))
             return
         try:
-            if not update_available(run_command):
+            release = update_available(run_command)
+            if release is None:
                 QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
-            if QMessageBox.question(self, tr("update"), tr("update_available")) != QMessageBox.Yes:
+            if QMessageBox.question(self, tr("update"), tr("update_available", version=release)
+                                    ) != QMessageBox.Yes:
                 return
             self.save_all()
-            install_latest(run_command)
+            install_release(release, run_command)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             QMessageBox.warning(self, APP_NAME, tr("update_failed", error=error))
             return
@@ -344,8 +346,9 @@ class MainWindow(QWidget):
 
         def check_and_install() -> None:
             try:
-                if update_available():
-                    install_latest()
+                release = update_available()
+                if release is not None:
+                    install_release(release)
                     self.auto_updated.emit()
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                 print(f"Automatic update failed: {error}", file=sys.stderr)

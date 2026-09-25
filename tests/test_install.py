@@ -16,12 +16,20 @@ def home(tmp_path):
     return home
 
 
-def install_sh(home, *args, script=REPO_DIR / "install.sh"):
+def install_sh(home, *args, repo=None, piped=False):
+    """Run install.sh from this repository, or as `curl ... | bash` does when piped."""
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("XDG_", "PENSE_BETE_"))}
     env["HOME"] = str(home)
-    result = subprocess.run(["bash", str(script), "--yes", *args], env=env,
-                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if repo is not None:
+        env["PENSE_BETE_REPO"] = str(repo)
+    script = REPO_DIR / "install.sh"
+    if piped:
+        result = subprocess.run(["bash", "-s", "--", "--yes", *args], env=env,
+                                input=script.read_text(), capture_output=True, text=True)
+    else:
+        result = subprocess.run(["bash", str(script), "--yes", *args], env=env,
+                                capture_output=True, text=True, stdin=subprocess.DEVNULL)
     assert result.returncode == 0, result.stderr
     return result
 
@@ -110,3 +118,29 @@ def test_the_development_entry_runs_the_clone_and_uninstalling_keeps_it(home):
 
     assert not desktop_file(home, "pense-bete-dev").exists()
     assert (REPO_DIR / "pense_bete.py").exists()
+
+
+def test_the_standalone_installer_installs_the_newest_release(home, tagged_repo):
+    repo, commits = tagged_repo
+    target = home / "app"
+
+    result = install_sh(home, str(target), repo=repo, piped=True)
+
+    assert "v1.10.0" in result.stdout
+    assert (target / ".version").read_text().strip() == commits["v1.10.0"]
+    assert (target / "pensebete" / "app.py").is_file()
+
+
+def test_the_standalone_installer_falls_back_to_the_latest_commit(home, tmp_path):
+    repo = tmp_path / "untagged.git"
+    subprocess.run(["git", "clone", "--quiet", "--bare", "--no-local", str(REPO_DIR), str(repo)],
+                   check=True)
+    subprocess.run(["git", "-C", str(repo), "tag", "-d", *subprocess.run(
+        ["git", "-C", str(repo), "tag"], capture_output=True, text=True).stdout.split()],
+        capture_output=True)
+    target = home / "app"
+
+    result = install_sh(home, str(target), repo=repo, piped=True)
+
+    assert "no release" in result.stderr
+    assert (target / "pense_bete.py").is_file()

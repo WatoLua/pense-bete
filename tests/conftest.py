@@ -79,3 +79,27 @@ def commits(repo_dir: Path) -> list[str]:
     output = subprocess.run(["git", "-C", str(repo_dir), "log", "--format=%s"],
                             capture_output=True, text=True, check=True).stdout
     return output.splitlines()
+
+
+@pytest.fixture
+def tagged_repo(tmp_path):
+    """A bare copy of this repository with releases v1.9.0 (on the parent commit),
+    v1.10.0 (annotated, on HEAD) and a v2.0.0-rc1 that is not a release.
+
+    Returns the repository and the commit of each tag.
+    """
+    import subprocess
+
+    def git(*args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    repo = tmp_path / "remote.git"
+    git("clone", "--quiet", "--bare", "--no-local", str(REPO_DIR), str(repo))
+    head = git("rev-parse", "HEAD", cwd=repo)
+    parent = git("rev-parse", "HEAD~1", cwd=repo)
+    git("tag", "v1.9.0", parent, cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "-m", "Release",
+        "v1.10.0", head, cwd=repo)
+    git("tag", "v2.0.0-rc1", head, cwd=repo)
+    return repo, {"v1.9.0": parent, "v1.10.0": head}

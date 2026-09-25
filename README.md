@@ -75,7 +75,7 @@ The installer:
 
 1. checks that `python3` and `git` are available, warns if `libxcb-cursor0` is
    missing, and offers to install PySide6 with pip if it is missing;
-2. downloads the application;
+2. downloads the newest release of the application;
 3. asks where to install it — press Enter to keep the default,
    `~/.local/opt/pense-bete`;
 4. adds **Pense-bête** to the GNOME application menu, and a `pense-bete`
@@ -95,8 +95,11 @@ From a clone of the repository, `./install.sh` does the same.
 ### Updating
 
 In the main window, open the **⋮** menu and choose **Update**: Pense-bête checks
-GitHub for a new version, installs it and offers to restart. Running the
+GitHub for a new release, installs it and offers to restart. Running the
 installation command again does the same. The notes are not touched.
+
+A release is a `vX.Y.Z` tag of the repository: commits pushed without a new tag
+reach nobody.
 
 With **Update automatically at launch** checked in the same menu, Pense-bête
 looks for a new version each time it starts, in the background, and installs
@@ -149,6 +152,20 @@ next launch; `./pense-bete` from the clone does the same, and **Restart** in the
 **⋮** menu, only there in development, relaunches it with the current code. `pense-bete-dev` is
 also available as a command. To remove the entry: `./install.sh --uninstall --dev`
 (the clone itself is kept).
+
+### Releasing
+
+Installations and updates follow the highest `vX.Y.Z` tag, compared number by
+number (`v1.10.0` is newer than `v1.9.0`); other tags are ignored. To publish the
+commit on `main` as a new version:
+
+```sh
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+Until the repository has a release, the installer takes the latest commit of the
+default branch, and the application finds no update.
 
 ### Tests
 

@@ -1,5 +1,6 @@
 """Updating the installed application from its repository."""
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -33,21 +34,49 @@ def can_update() -> bool:
     return not (APP_DIR / ".git").exists()
 
 
-def update_available(runner=run) -> bool:
-    """Whether the repository's HEAD differs from the installed commit."""
-    remote = runner("git", "ls-remote", REPO_URL, "HEAD")
+def parse_version(tag: str) -> tuple[int, int, int] | None:
+    """(1, 2, 10) for "v1.2.10"; None for a tag that does not name a release."""
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+    return tuple(map(int, match.groups())) if match else None
+
+
+def latest_release(runner=run) -> tuple[str, str] | None:
+    """(tag, commit) of the newest vX.Y.Z tag of the repository, None when it has none."""
+    remote = runner("git", "ls-remote", "--tags", REPO_URL, "refs/tags/v*")
     if remote.returncode:
         raise RuntimeError(command_error(remote))
-    latest = remote.stdout.split()[0] if remote.stdout.split() else ""
+    commits: dict[str, str] = {}
+    for line in remote.stdout.splitlines():
+        commit, _, ref = line.partition("\t")
+        tag = ref.removeprefix("refs/tags/")
+        # An annotated tag is listed twice: its own object, then as "tag^{}" the commit it
+        # points to, which is what an installation records.
+        if tag.endswith("^{}"):
+            commits[tag[:-3]] = commit
+        else:
+            commits.setdefault(tag, commit)
+    releases = [tag for tag in commits if parse_version(tag)]
+    if not releases:
+        return None
+    tag = max(releases, key=parse_version)
+    return tag, commits[tag]
+
+
+def update_available(runner=run) -> str | None:
+    """The tag of the newest release when it is not the installed commit."""
+    release = latest_release(runner)
     installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
-    return bool(latest) and latest != installed
+    if release is None or release[1] == installed:
+        return None
+    return release[0]
 
 
-def install_latest(runner=run) -> None:
-    """Install the repository's HEAD over this installation; notes are not touched."""
+def install_release(tag: str, runner=run) -> None:
+    """Install the given release over this installation; notes are not touched."""
     with tempfile.TemporaryDirectory() as temporary:
         source = Path(temporary) / "pense-bete"
-        result = runner("git", "clone", "--quiet", "--depth", "1", "--", REPO_URL, str(source))
+        result = runner("git", "clone", "--quiet", "--depth", "1", "--branch", tag, "--",
+                        REPO_URL, str(source))
         if result.returncode == 0:
             result = runner("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
     if result.returncode:

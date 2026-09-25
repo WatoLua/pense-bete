@@ -7,7 +7,8 @@
 #        ./install.sh --dev           register this clone as "Pense-bête (dev)"
 #        --yes                        ask nothing, take the default answers
 #
-# Also runs on its own, without a clone of the repository:
+# Also runs on its own, without a clone of the repository; it then installs the newest
+# release, the highest vX.Y.Z tag:
 #   curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash
 set -euo pipefail
 
@@ -126,6 +127,12 @@ uninstall() {
     fi
 }
 
+latest_release() {  # the newest vX.Y.Z tag of REPO_URL, empty when it has none
+    git ls-remote --tags --refs -- "$REPO_URL" 'refs/tags/v*' 2>/dev/null \
+        | sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' \
+        | sort -V | tail -n 1
+}
+
 check_dependencies() {
     command -v python3 >/dev/null || fail "$(t "python3 not found, please install it first." "python3 est introuvable, installez-le d'abord.")"
     command -v git >/dev/null || fail "$(t "git not found, please install it first (it versions the notes)." "git est introuvable, installez-le d'abord (il versionne les post-its).")"
@@ -133,8 +140,14 @@ check_dependencies() {
     if [[ -z "$SOURCE_DIR" ]]; then
         SOURCE_DIR="$(mktemp -d)"
         trap 'rm -rf -- "$SOURCE_DIR"' EXIT
-        info "$(t "Downloading Pense-bête from $REPO_URL" "Téléchargement de Pense-bête depuis $REPO_URL")"
-        git clone --quiet --depth 1 -- "$REPO_URL" "$SOURCE_DIR" \
+        local release
+        release="$(latest_release)"
+        if [[ -n "$release" ]]; then
+            info "$(t "Downloading Pense-bête $release from $REPO_URL" "Téléchargement de Pense-bête $release depuis $REPO_URL")"
+        else
+            warn "$(t "$REPO_URL has no release yet: installing its latest commit." "$REPO_URL n'a encore aucune version publiée : installation de son dernier commit.")"
+        fi
+        git clone --quiet --depth 1 ${release:+--branch "$release"} -- "$REPO_URL" "$SOURCE_DIR" \
             || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
     fi
 
