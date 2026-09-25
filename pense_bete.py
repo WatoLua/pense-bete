@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QLibraryInfo, QLocale, Qt, QTimer, QTranslator, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -40,15 +40,46 @@ ICON_PATH = Path(__file__).resolve().parent / "icon.svg"
 AUTOSAVE_DELAY_MS = 10_000
 DEFAULT_COLOR = "#fff59d"
 PALETTE = {
-    "Jaune": "#fff59d",
-    "Orange": "#ffcc80",
-    "Rose": "#f8bbd0",
-    "Violet": "#d1c4e9",
-    "Bleu": "#b3e5fc",
-    "Vert": "#c5e1a5",
-    "Gris": "#e0e0e0",
+    "yellow": "#fff59d",
+    "orange": "#ffcc80",
+    "pink": "#f8bbd0",
+    "purple": "#d1c4e9",
+    "blue": "#b3e5fc",
+    "green": "#c5e1a5",
+    "grey": "#e0e0e0",
 }
-UNTITLED = "(sans titre)"
+
+# The interface is in French when the system locale is French, in English otherwise.
+LANGUAGE = "fr" if QLocale.system().language() == QLocale.French else "en"
+TRANSLATIONS = {
+    "untitled": {"en": "(untitled)", "fr": "(sans titre)"},
+    "title_placeholder": {"en": "Title", "fr": "Titre"},
+    "content_placeholder": {"en": "Write here…", "fr": "Écrire ici…"},
+    "color": {"en": "Color", "fr": "Couleur"},
+    "other_color": {"en": "Other…", "fr": "Autre…"},
+    "note_color": {"en": "Note color", "fr": "Couleur du post-it"},
+    "yellow": {"en": "Yellow", "fr": "Jaune"},
+    "orange": {"en": "Orange", "fr": "Orange"},
+    "pink": {"en": "Pink", "fr": "Rose"},
+    "purple": {"en": "Purple", "fr": "Violet"},
+    "blue": {"en": "Blue", "fr": "Bleu"},
+    "green": {"en": "Green", "fr": "Vert"},
+    "grey": {"en": "Grey", "fr": "Gris"},
+    "new": {"en": "New", "fr": "Nouveau"},
+    "delete": {"en": "Delete", "fr": "Supprimer"},
+    "confirm_delete": {"en": "Delete the note “{title}”?",
+                       "fr": "Supprimer le post-it « {title} » ?"},
+    "save_failed": {"en": "Could not save the note:\n{error}",
+                    "fr": "Échec de la sauvegarde :\n{error}"},
+    "create_failed": {"en": "Could not create the note:\n{error}",
+                      "fr": "Impossible de créer le post-it :\n{error}"},
+    "delete_failed": {"en": "Could not delete the note:\n{error}",
+                      "fr": "Échec de la suppression :\n{error}"},
+}
+
+
+def tr(key: str, **values) -> str:
+    return TRANSLATIONS[key][LANGUAGE].format(**values)
 
 
 def text_color_for(background: str) -> str:
@@ -104,7 +135,7 @@ class Note:
 
     @property
     def display_title(self) -> str:
-        return self.title.strip() or UNTITLED
+        return self.title.strip() or tr("untitled")
 
     def to_dict(self) -> dict:
         return {"id": self.id, "title": self.title, "color": self.color,
@@ -162,23 +193,23 @@ class NoteWindow(QWidget):
         self.timer.timeout.connect(self.save)
 
         self.title_edit = QLineEdit(note.title)
-        self.title_edit.setPlaceholderText("Titre")
+        self.title_edit.setPlaceholderText(tr("title_placeholder"))
         self.title_edit.textChanged.connect(self._on_title_changed)
 
         self.color_button = QToolButton()
-        self.color_button.setText("Couleur")
+        self.color_button.setText(tr("color"))
         self.color_button.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.color_button)
         for name, color in PALETTE.items():
-            action = QAction(color_icon(color), name, menu)
+            action = QAction(color_icon(color), tr(name), menu)
             action.triggered.connect(lambda _=False, c=color: self.set_color(c))
             menu.addAction(action)
         menu.addSeparator()
-        menu.addAction("Autre…", self._choose_custom_color)
+        menu.addAction(tr("other_color"), self._choose_custom_color)
         self.color_button.setMenu(menu)
 
         self.content_edit = QPlainTextEdit(note.content)
-        self.content_edit.setPlaceholderText("Écrire ici…")
+        self.content_edit.setPlaceholderText(tr("content_placeholder"))
         self.content_edit.textChanged.connect(self._mark_dirty)
 
         header = QHBoxLayout()
@@ -199,7 +230,7 @@ class NoteWindow(QWidget):
         self.changed.emit(self.note)
 
     def _choose_custom_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self.note.color), self, "Couleur du post-it")
+        color = QColorDialog.getColor(QColor(self.note.color), self, tr("note_color"))
         if color.isValid():
             self.set_color(color.name())
 
@@ -235,7 +266,7 @@ class NoteWindow(QWidget):
         try:
             self.store.save(self.note, f'Update "{self.note.display_title}"')
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", f"Échec de la sauvegarde :\n{error}")
+            QMessageBox.warning(self, "Pense-bête", tr("save_failed", error=error))
             return
         self.dirty = False
 
@@ -260,9 +291,9 @@ class MainWindow(QWidget):
         self.list = QListWidget()
         self.list.itemActivated.connect(lambda item: self.open_note(item.data(Qt.UserRole)))
 
-        new_button = QPushButton("Nouveau")
+        new_button = QPushButton(tr("new"))
         new_button.clicked.connect(self.create_note)
-        delete_button = QPushButton("Supprimer")
+        delete_button = QPushButton(tr("delete"))
         delete_button.clicked.connect(self.delete_selected)
 
         buttons = QHBoxLayout()
@@ -296,7 +327,7 @@ class MainWindow(QWidget):
         try:
             self.store.save(note, "Create note")
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", f"Impossible de créer le post-it :\n{error}")
+            QMessageBox.warning(self, "Pense-bête", tr("create_failed", error=error))
             return
         self.notes.append(note)
         self.refresh_list()
@@ -325,7 +356,7 @@ class MainWindow(QWidget):
             return
         note = self._note_by_id(item.data(Qt.UserRole))
         answer = QMessageBox.question(
-            self, "Supprimer", f"Supprimer le post-it « {note.display_title} » ?"
+            self, tr("delete"), tr("confirm_delete", title=note.display_title)
         )
         if answer != QMessageBox.Yes:
             return
@@ -335,7 +366,7 @@ class MainWindow(QWidget):
         try:
             self.store.delete(note)
         except (OSError, subprocess.CalledProcessError) as error:
-            QMessageBox.warning(self, "Pense-bête", f"Échec de la suppression :\n{error}")
+            QMessageBox.warning(self, "Pense-bête", tr("delete_failed", error=error))
         self.notes.remove(note)
         self.refresh_list()
 
@@ -353,6 +384,11 @@ def main() -> None:
     # Matches pense-bete.desktop, so the desktop shell groups the windows under its entry.
     app.setDesktopFileName("pense-bete")
     app.setWindowIcon(QIcon(str(ICON_PATH)))
+    # Qt's own strings (dialog buttons, color picker) follow the same language.
+    qt_translator = QTranslator(app)
+    if qt_translator.load(QLocale(LANGUAGE), "qtbase", "_",
+                          QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(qt_translator)
     app.setQuitOnLastWindowClosed(False)
     window = MainWindow(NoteStore(DATA_DIR))
     window.show()

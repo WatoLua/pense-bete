@@ -8,7 +8,7 @@ opens in its own window, with a title, a color and free text.
 - Every save is committed to a local git repository, so the whole history of
   each note is kept: `git -C ~/.local/share/pense-bete log`.
 
-The interface is in French.
+The interface is in French or English, following the system language.
 
 ## Requirements
 
