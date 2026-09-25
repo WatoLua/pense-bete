@@ -3,7 +3,7 @@
 import subprocess
 
 from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -16,15 +16,36 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .config import APP_NAME, AUTOSAVE_DELAY_MS, PALETTE
+from .diff import differences, utf16_ranges
 from .i18n import tr
 from .storage import Note, NoteStore, Version
 from .style import color_icon, pin_icon, text_color_for
+
+
+# Translucent, so that they read on any note color.
+REMOVED_COLOR = QColor(229, 57, 53, 90)
+ADDED_COLOR = QColor(67, 160, 71, 90)
+
+
+def highlights(editor: QPlainTextEdit, text: str, ranges: list[tuple[int, int]],
+               color: QColor) -> list[QTextEdit.ExtraSelection]:
+    """Colored backgrounds over the given ranges of the editor's text, which stays as is."""
+    selections = []
+    for start, length in utf16_ranges(text, ranges):
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setBackground(color)
+        selection.cursor = QTextCursor(editor.document())
+        selection.cursor.setPosition(start)
+        selection.cursor.setPosition(start + length, QTextCursor.KeepAnchor)
+        selections.append(selection)
+    return selections
 
 
 class HistoryPanel(QFrame):
@@ -33,6 +54,7 @@ class HistoryPanel(QFrame):
     restore_requested = Signal(object)  # Version
     copy_requested = Signal(object)  # Version
     close_requested = Signal()
+    shown = Signal()  # another version, or none, is on display
 
     def __init__(self):
         super().__init__()
@@ -124,6 +146,7 @@ class HistoryPanel(QFrame):
             self.position.clear()
             self.title.setText(tr("history_empty"))
             self.content.clear()
+            self.shown.emit()
             return
         self.position.setText(f"{len(self.versions) - index} / {len(self.versions)}")
         self.title.setText(version.title.strip() or tr("untitled"))
@@ -134,6 +157,7 @@ class HistoryPanel(QFrame):
             f" color: {foreground}; border: none; font-size: 13px; }}"
             " QLabel#historyTitle { font-weight: bold; font-size: 14px; padding: 2px; }"
         )
+        self.shown.emit()
 
 
 class NoteWindow(QWidget):
@@ -179,6 +203,8 @@ class NoteWindow(QWidget):
         self.content_edit = QPlainTextEdit(note.content)
         self.content_edit.setPlaceholderText(tr("content_placeholder"))
         self.content_edit.textChanged.connect(self._mark_dirty)
+        self.content_edit.textChanged.connect(
+            lambda: self.history.isVisible() and self.differences_timer.start())
 
         self.on_top_button = QToolButton()
         self.on_top_button.setCheckable(True)
@@ -194,7 +220,13 @@ class NoteWindow(QWidget):
 
         self.history = HistoryPanel()
         self.history.hide()
+        self.history.shown.connect(self._highlight_differences)
         self.history.restore_requested.connect(self.restore_version)
+        # Typing moves the differences; they follow once it pauses.
+        self.differences_timer = QTimer(self)
+        self.differences_timer.setSingleShot(True)
+        self.differences_timer.setInterval(200)
+        self.differences_timer.timeout.connect(self._highlight_differences)
         self.history.copy_requested.connect(self.copy_requested)
         self.history.close_requested.connect(lambda: self.history_button.setChecked(False))
         for keys, step in (("Alt+Left", 1), ("Alt+Right", -1)):
@@ -303,6 +335,8 @@ class NoteWindow(QWidget):
             else:  # the note keeps the width it was given beside the history
                 width = self.splitter.sizes()[1] + self.width() - sum(self.splitter.sizes())
             self.history.hide()
+            self.differences_timer.stop()
+            self.content_edit.setExtraSelections([])
             self.geometry_before_history = None
             if not self.isMaximized():
                 # The window's minimum width counts the panel until the layout is redone.
@@ -327,6 +361,18 @@ class NoteWindow(QWidget):
     def _on_top_toggled(self, on_top: bool) -> None:
         self.set_on_top(on_top)
         self.on_top_changed.emit(self)
+
+    def _highlight_differences(self) -> None:
+        """Mark, over the text, what the note lost since the version shown (in the
+        history, in red) and what it gained (in the note, in green)."""
+        version = self.history.current()
+        current = self.content_edit.toPlainText()
+        removed, added = differences(version.content, current) if version else ([], [])
+        self.history.content.setExtraSelections(
+            highlights(self.history.content, version.content if version else "", removed,
+                       REMOVED_COLOR))
+        self.content_edit.setExtraSelections(
+            highlights(self.content_edit, current, added, ADDED_COLOR))
 
     def _load_history(self) -> None:
         try:

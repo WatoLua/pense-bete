@@ -149,3 +149,30 @@ def test_keeping_on_top_sets_the_window_flag(window):
     window.on_top_button.click()
     assert not window.windowFlags() & Qt.WindowStaysOnTopHint
     assert toggled == [window, window]
+
+
+def highlighted(editor):
+    return [selection.cursor.selectedText() for selection in editor.extraSelections()]
+
+
+def test_the_history_highlights_what_changed_since_the_version_shown(qtbot, window):
+    window.show()
+    window.content_edit.setPlainText("first line\nsecond")
+    window.history_button.setChecked(True)
+
+    assert window.history.current().content == "first"
+    assert highlighted(window.history.content) == []
+    # Qt separates the paragraphs of a selection with U+2029.
+    assert highlighted(window.content_edit) == [" line\u2029second"]
+    assert window.content_edit.toPlainText() == "first line\nsecond"  # the text is untouched
+
+
+def test_the_highlights_follow_the_typing_and_go_with_the_history(qtbot, window):
+    window.show()
+    window.history_button.setChecked(True)
+    window.content_edit.setPlainText("first draft")
+
+    qtbot.waitUntil(lambda: highlighted(window.content_edit) == [" draft"], timeout=2000)
+
+    window.history_button.setChecked(False)
+    assert window.content_edit.extraSelections() == []

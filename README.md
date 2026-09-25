@@ -30,7 +30,10 @@ history of each note is kept, apart from the others.
 **History** in a note splits its window: the version picked on the left,
 read-only and in its own color, the current note on the right. Versions are
 picked from a dated list, newest first, or browsed with the arrows
-(Alt+← / Alt+→). From there:
+(Alt+← / Alt+→). What changed since that version is highlighted, word by word:
+in red in the version, what the note has lost; in green in the note, what it
+has gained. The highlights follow the typing and never change the text. From
+there:
 
 - **Restore** replaces the current note with that version; the replaced text
   stays in the history;
