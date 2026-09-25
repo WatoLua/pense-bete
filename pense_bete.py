@@ -15,8 +15,11 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal
+from PySide6.QtCore import (
+    QByteArray, QLibraryInfo, QLocale, QProcess, Qt, QTimer, QTranslator, Signal,
+)
 from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -28,6 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -43,6 +47,11 @@ DATA_DIR = Path(
     os.environ.get("PENSE_BETE_DIR")
     or Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID
 )
+# Window state, kept apart from the notes so that moving a window never creates a commit.
+SESSION_FILE = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_ID / "session.json"
+)
+RECENT_NOTES = 3
 ICON_PATH = APP_DIR / ("icon-dev.svg" if DEV_MODE else "icon.svg")
 # Written by install.sh: the installed commit of the repository.
 VERSION_FILE = APP_DIR / ".version"
@@ -86,6 +95,10 @@ TRANSLATIONS = {
     "delete_failed": {"en": "Could not delete the note:\n{error}",
                       "fr": "Échec de la suppression :\n{error}"},
     "options": {"en": "Options", "fr": "Options"},
+    "keep_running": {"en": "Keep running in the background when closed",
+                     "fr": "Rester en arrière-plan à la fermeture"},
+    "open_main": {"en": "Open {app}", "fr": "Ouvrir {app}"},
+    "quit": {"en": "Quit", "fr": "Quitter"},
     "update": {"en": "Update", "fr": "Mettre à jour"},
     "uninstall": {"en": "Uninstall", "fr": "Désinstaller"},
     "update_from_clone": {
@@ -217,10 +230,53 @@ class NoteStore:
         self.git.commit_file(note.filename, f'Delete "{note.display_title}"')
 
 
+class Session:
+    """What is open across runs: windows and their geometry, recent notes, options.
+
+    Keys: "background" (bool), "main_open" (bool), "open_notes" and "recent" (note
+    ids, most recent first for "recent"), "geometries" (window key -> base64).
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        try:
+            self.data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, key: str, default):
+        return self.data.get(key, default)
+
+    def set(self, key: str, value) -> None:
+        self.data[key] = value
+
+    def geometry(self, key: str) -> QByteArray | None:
+        value = self.data.get("geometries", {}).get(key)
+        return QByteArray.fromBase64(value.encode()) if value else None
+
+    def set_geometry(self, key: str, geometry: QByteArray) -> None:
+        self.data.setdefault("geometries", {})[key] = bytes(geometry.toBase64()).decode()
+
+    def forget(self, note_id: str) -> None:
+        self.data.get("geometries", {}).pop(note_id, None)
+        for key in ("open_notes", "recent"):
+            self.data[key] = [i for i in self.data.get(key, []) if i != note_id]
+
+    def write(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self.data, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(self.path)
+        except OSError as error:
+            print(f"Could not save the session: {error}", file=sys.stderr)
+
+
 class NoteWindow(QWidget):
     """Editor window for a single note."""
 
     changed = Signal(object)  # title or color changed, the list must be refreshed
+    closing = Signal(object)  # the window is closing, after its note was saved
 
     def __init__(self, note: Note, store: NoteStore):
         super().__init__()
@@ -320,15 +376,20 @@ class NoteWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         self.save()
+        self.closing.emit(self)
         super().closeEvent(event)
 
 
 class MainWindow(QWidget):
-    def __init__(self, store: NoteStore):
+    def __init__(self, store: NoteStore, session: Session, server: QLocalServer):
         super().__init__()
         self.store = store
+        self.session = session
+        self.server = server
         self.notes: list[Note] = store.load_all()
         self.windows: dict[str, NoteWindow] = {}
+        self.quitting = False
+        server.newConnection.connect(self._on_other_instance)
 
         self.list = QListWidget()
         self.list.itemActivated.connect(lambda item: self.open_note(item.data(Qt.UserRole)))
@@ -345,9 +406,24 @@ class MainWindow(QWidget):
         options_button.setStyleSheet("QToolButton::menu-indicator { image: none; }")
         options_button.setFixedSize(new_button.sizeHint().height(), new_button.sizeHint().height())
         options_menu = QMenu(options_button)
+        self.background_action = options_menu.addAction(tr("keep_running"))
+        self.background_action.setCheckable(True)
+        self.background_action.setChecked(session.get("background", False))
+        self.background_action.toggled.connect(self._set_background)
+        options_menu.addSeparator()
         options_menu.addAction(tr("update"), self.update_app)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
+        options_menu.addSeparator()
+        options_menu.addAction(tr("quit"), self.quit_app)
         options_button.setMenu(options_menu)
+
+        # The tray icon's menu reopens this window or one of the recent notes.
+        self.tray_menu = QMenu(self)
+        self.tray = QSystemTrayIcon(QIcon(str(ICON_PATH)), self)
+        self.tray.setToolTip(APP_NAME)
+        self.tray.setContextMenu(self.tray_menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.setVisible(self.background_action.isChecked())
 
         buttons = QHBoxLayout()
         buttons.addWidget(new_button)
@@ -375,6 +451,66 @@ class MainWindow(QWidget):
             self.list.addItem(item)
             if note.id == selected:
                 self.list.setCurrentItem(item)
+        self.refresh_tray_menu()
+
+    def refresh_tray_menu(self) -> None:
+        self.tray_menu.clear()
+        self.tray_menu.addAction(tr("open_main"), self.show_main)
+        recent = [note for note in map(self._note_by_id, self.session.get("recent", [])) if note]
+        if recent:
+            self.tray_menu.addSeparator()
+        for note in recent[:RECENT_NOTES]:
+            self.tray_menu.addAction(color_icon(note.color), note.display_title,
+                                     lambda i=note.id: self.open_note(i))
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(tr("quit"), self.quit_app)
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        # A click usually opens the menu; activating the icon itself shows this window.
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.show_main()
+
+    def _on_other_instance(self) -> None:
+        """Another launch of the application asks this one to show itself."""
+        connection = self.server.nextPendingConnection()
+        if connection is not None:
+            connection.disconnectFromServer()
+        self.show_main()
+
+    def _set_background(self, enabled: bool) -> None:
+        self.session.set("background", enabled)
+        self.tray.setVisible(enabled)
+        self.save_session()
+
+    def save_session(self) -> None:
+        """Record the open windows and their geometry."""
+        if self.quitting:
+            return
+        self.session.set("main_open", self.isVisible())
+        self.session.set_geometry("main", self.saveGeometry())
+        self.session.set("open_notes", list(self.windows))
+        for note_id, window in self.windows.items():
+            self.session.set_geometry(note_id, window.saveGeometry())
+        self.session.write()
+
+    def restore_session(self) -> None:
+        """Reopen the windows that were open when the application last quit."""
+        geometry = self.session.geometry("main")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        open_notes = [i for i in self.session.get("open_notes", []) if self._note_by_id(i)]
+        # Nothing on screen after a launch would look like a failure, so the list shows then.
+        if self.session.get("main_open", True) or not open_notes:
+            self.show_main()
+        for note_id in open_notes:
+            self.open_note(note_id, recent=False)
+        self.save_session()
+
+    def show_main(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.save_session()
 
     def create_note(self) -> None:
         note = Note(uuid.uuid4().hex)
@@ -389,7 +525,8 @@ class MainWindow(QWidget):
         self.open_note(note.id)
         self.windows[note.id].title_edit.setFocus()
 
-    def open_note(self, note_id: str) -> None:
+    def open_note(self, note_id: str, recent: bool = True) -> None:
+        """Show a note's window; recent=False when restoring, which keeps the recent order."""
         window = self.windows.get(note_id)
         if window is None:
             note = self._note_by_id(note_id)
@@ -397,12 +534,27 @@ class MainWindow(QWidget):
                 return
             window = NoteWindow(note, self.store)
             window.changed.connect(lambda _note: self.refresh_list())
-            window.destroyed.connect(lambda _=None, i=note_id: self.windows.pop(i, None))
+            window.closing.connect(self._on_note_closing)
             window.setAttribute(Qt.WA_DeleteOnClose)
+            geometry = self.session.geometry(note_id)
+            if geometry is not None:
+                window.restoreGeometry(geometry)
             self.windows[note_id] = window
         window.show()
         window.raise_()
         window.activateWindow()
+        if recent:
+            others = [i for i in self.session.get("recent", []) if i != note_id]
+            self.session.set("recent", [note_id, *others][:RECENT_NOTES])
+            self.refresh_tray_menu()
+        self.save_session()
+
+    def _on_note_closing(self, window: NoteWindow) -> None:
+        if self.quitting:
+            return  # the session was recorded before the windows started closing
+        self.session.set_geometry(window.note.id, window.saveGeometry())
+        self.windows.pop(window.note.id, None)
+        self.save_session()
 
     def delete_selected(self) -> None:
         item = self.list.currentItem()
@@ -422,7 +574,9 @@ class MainWindow(QWidget):
         except (OSError, subprocess.CalledProcessError) as error:
             QMessageBox.warning(self, APP_NAME, tr("delete_failed", error=error))
         self.notes.remove(note)
+        self.session.forget(note.id)
         self.refresh_list()
+        self.save_session()
 
     def save_all(self) -> None:
         for window in self.windows.values():
@@ -457,7 +611,9 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, APP_NAME, tr("update_failed", error=error))
             return
         if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
-            self.close()
+            # Closed first, so the new instance does not hand itself over to this one.
+            self.server.close()
+            self.quit_app()
             QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
 
     def uninstall_app(self) -> None:
@@ -475,14 +631,30 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, APP_NAME, tr("uninstall_failed", error=error))
             return
         QMessageBox.information(self, APP_NAME, tr("uninstalled", path=DATA_DIR))
-        self.close()
+        self.quit_app()
 
-    def closeEvent(self, event) -> None:
-        # Closing the list quits the application; open notes are saved on the way out.
+    def quit_app(self) -> None:
+        """Record the session, then close every window, saving the notes, and quit."""
+        if self.quitting:
+            return
+        self.save_session()
+        self.quitting = True
         for window in list(self.windows.values()):
             window.close()
-        super().closeEvent(event)
+        self.tray.hide()
+        self.close()
         QApplication.quit()
+
+    def closeEvent(self, event) -> None:
+        super().closeEvent(event)
+        if self.quitting:
+            return
+        if self.background_action.isChecked():
+            # Only the list goes away: the notes stay open and the application keeps running.
+            self.hide()
+            self.save_session()
+        else:
+            self.quit_app()
 
 
 def main() -> None:
@@ -502,8 +674,20 @@ def main() -> None:
                           QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
         app.installTranslator(qt_translator)
     app.setQuitOnLastWindowClosed(False)
-    window = MainWindow(NoteStore(DATA_DIR))
-    window.show()
+
+    # One instance per user: a second launch asks the running one to show its window.
+    server_name = f"{APP_ID}-{os.getuid()}"
+    other = QLocalSocket()
+    other.connectToServer(server_name)
+    if other.waitForConnected(1000):
+        other.disconnectFromServer()
+        return
+    QLocalServer.removeServer(server_name)  # left behind by an instance that crashed
+    server = QLocalServer()
+    server.listen(server_name)
+
+    window = MainWindow(NoteStore(DATA_DIR), Session(SESSION_FILE), server)
+    window.restore_session()
     sys.exit(app.exec())
 
 

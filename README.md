@@ -7,6 +7,11 @@ opens in its own window, with a title, a color and free text.
   immediately when their window is closed.
 - Every save is committed to a local git repository, so the whole history of
   each note is kept: `git -C ~/.local/share/pense-bete log`.
+- The open windows are restored at the next launch.
+- With **Keep running in the background when closed** (in the **⋮** menu),
+  closing the list leaves the notes open and the application running, with an
+  icon in the top bar whose menu reopens the list or one of the last three
+  notes opened. Launching the application again also brings the list back.
 
 The interface is in French or English, following the system language.
 
