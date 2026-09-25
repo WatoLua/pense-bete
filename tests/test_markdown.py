@@ -67,7 +67,8 @@ def test_markdown_is_formatted_without_changing_the_text(qtbot, window, store):
     assert char_format(window, 3, 3).foreground().color().name() == "#c62828"  # ko, in red
     assert char_format(window, 4, 3).foreground().color().name() == "#2e7d32"  # ok, in green
     assert char_format(window, 2, 3).foreground().color().name() != "#2e7d32"  # to do
-    assert char_format(window, 4, 8).fontStrikeOut()  # an ok task is struck through
+    ok_text = char_format(window, 4, 8)  # an ok task is struck through and faded
+    assert ok_text.fontStrikeOut() and ok_text.foreground().color().alpha() < 255
     ko_text = char_format(window, 3, 8)
     assert ko_text is None or not ko_text.fontStrikeOut()  # a ko task is not
     assert char_format(window, 0, 3).font().pixelSize() > 13  # the heading
@@ -270,3 +271,17 @@ def test_ctrl_backspace_deletes_the_row_and_ctrl_shift_backspace_the_column(tabl
     assert lines(table_window) == ["| Who |", "| --- |", "after"]
     key(table_window, Qt.Key_Backspace, Qt.ControlModifier | Qt.ShiftModifier)
     assert lines(table_window)[0] == "| Who |"  # the last column stays
+
+
+def test_ctrl_space_in_a_box_turns_it_to_its_next_state(window):
+    window.set_markdown(True)
+    put_cursor(window, 2, 3)  # between "[" and " "
+
+    for expected in ("- [v] task", "- [x] task", "- [ ] task"):
+        key(window, Qt.Key_Space, Qt.ControlModifier)
+        assert lines(window)[2] == expected
+    assert cursor_place(window) == (2, 3)
+
+    put_cursor(window, 2, 8)  # in the task's text, not its box
+    key(window, Qt.Key_Space, Qt.ControlModifier)
+    assert lines(window)[2] == "- [ ] task"

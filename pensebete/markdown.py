@@ -73,6 +73,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             font.setPixelSize(self.font_size)
             text_format.setFont(font, QTextCharFormat.FontPropertiesSpecifiedOnly)
             text_format.setFontFamilies(font.families())
+        elif kind == "done":
+            text_format.setFontStrikeOut(True)
+            done = QColor(self.text_color)
+            done.setAlpha(150)
+            text_format.setForeground(done)
         elif kind in ("ok", "ko"):
             # Dark on a light note, light on a dark one, as the text is.
             light_note = self.text_color.lightness() < 128
@@ -125,7 +130,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 self._merge(task.end(1), task.end(), "ok" if state == "v" else "ko")
             if state == "v":  # what is ok is dealt with: its text, not the space before it
                 start = len(text) - len(text[task.end():].lstrip())
-                self._merge(start, len(text), "strike")
+                self._merge(start, len(text), "done")
         elif LIST_ITEM.match(text):
             item = LIST_ITEM.match(text)
             self._merge(len(item.group(1)), item.end(), "marker")
@@ -225,8 +230,23 @@ class MarkdownEditing(QObject):
                     toggle_checkbox(*checkbox)
                     return True
         elif event.type() == QEvent.KeyPress:
-            return self._table_key(event) or self._continue_list(event)
+            return self._toggle_key(event) or self._table_key(event) or self._continue_list(event)
         return False
+
+    def _toggle_key(self, event: QKeyEvent) -> bool:
+        """Ctrl+Space with the cursor in a task's box turns it to its next state."""
+        if event.key() != Qt.Key_Space or event.modifiers() != Qt.ControlModifier:
+            return False
+        cursor = self.editor.textCursor()
+        task = TASK.match(cursor.block().text())
+        # From just before "[" to just after "]".
+        if task is None or not task.end(1) <= cursor.positionInBlock() <= task.end():
+            return False
+        position = cursor.position()
+        toggle_checkbox(QTextCursor(cursor.block()), task.end(1) + 1)
+        cursor.setPosition(position)  # where it was, rather than past the new letter
+        self.editor.setTextCursor(cursor)
+        return True
 
     def _continue_list(self, event: QKeyEvent) -> bool:
         if event.key() not in (Qt.Key_Return, Qt.Key_Enter) or event.modifiers() & ~Qt.KeypadModifier:
