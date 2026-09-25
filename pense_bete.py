@@ -658,9 +658,14 @@ class MainWindow(QWidget):
 
 
 def main() -> None:
-    # Under Wayland, Qt draws the title bar itself. Its default decoration centers the
-    # title over the whole bar, where the buttons cover it on narrow note windows;
-    # bradient aligns it left. A decoration chosen by the user still wins.
+    # X11, through XWayland in a Wayland session, lets windows be put back where they
+    # were: Wayland leaves window positions to the compositor. Qt's xcb plugin needs
+    # libxcb-cursor0; without it, Qt falls back to Wayland. A platform set by the user
+    # still wins.
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
+    # In the Wayland fallback, Qt draws the title bar itself. Its default decoration
+    # centers the title over the whole bar, where the buttons cover it on narrow note
+    # windows; bradient aligns it left.
     os.environ.setdefault("QT_WAYLAND_DECORATION", "bradient")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)

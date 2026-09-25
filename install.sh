@@ -103,6 +103,12 @@ check_dependencies() {
             || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
     fi
 
+    # Only a warning: without it the application runs under Wayland, which does not
+    # restore window positions.
+    if ! ldconfig -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
+        warn "$(t "libxcb-cursor0 is missing: windows will not reopen where they were. Install it with: sudo apt install libxcb-cursor0" "libxcb-cursor0 est absent : les fenêtres ne se rouvriront pas à leur place. Installez-le avec : sudo apt install libxcb-cursor0")"
+    fi
+
     if python3 -c "import PySide6" 2>/dev/null; then
         return
     fi
