@@ -1,6 +1,6 @@
 # Pense-bête
 
-Sticky notes for the Linux desktop. A main window lists the notes; each note
+Sticky notes for Linux and Windows. A main window lists the notes; each note
 opens in its own window, with a title, a color and free text.
 
 The interface is in French or English, following the system language.
@@ -116,9 +116,12 @@ an import never overwrites anything.
 
 ## Requirements
 
-- Python 3.10+
-- git
+- Python 3.10+ — on Windows, from [python.org](https://www.python.org/downloads/)
+- git — on Windows, [Git for Windows](https://git-scm.com/download/win)
 - PySide6 (`pip install PySide6-Essentials`) — the installer offers to install it
+
+On Linux:
+
 - `libxcb-cursor0` (`sudo apt install libxcb-cursor0`), so that windows reopen
   where they were. Without it the application runs under Wayland, which leaves
   window placement to GNOME: sizes are restored, positions are not.
@@ -126,6 +129,8 @@ an import never overwrites anything.
   default on Ubuntu (`ubuntu-appindicators`).
 
 ## Installation
+
+### Linux
 
 Run this in a terminal:
 
@@ -153,6 +158,26 @@ curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh 
 ```
 
 From a clone of the repository, `./install.sh` does the same.
+
+### Windows
+
+Run this in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1 | iex
+```
+
+The installer checks that Python and git are available, offers to install
+PySide6 with pip if it is missing, downloads the newest release, asks where to
+install it — press Enter to keep the default, `%LOCALAPPDATA%\Programs\pense-bete`
+— and adds **Pense-bête** to the Start menu. Its windows are grouped under that
+entry in the taskbar, where it can be pinned.
+
+From a clone of the repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Target <directory>]
+```
 
 ### Updating
 
@@ -182,21 +207,26 @@ In the **⋮** menu, choose **Uninstall**, or run:
 ~/.local/opt/pense-bete/install.sh --uninstall
 ```
 
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\pense-bete\install.ps1" -Uninstall
+```
+
 The application, its menu entry and its command are removed. It then asks
 whether to delete the notes and settings as well — the default keeps them; in
-the application, that is the checkbox of the confirmation. `--purge` deletes
-them without asking. Only note directories are deleted, so a `PENSE_BETE_DIR`
+the application, that is the checkbox of the confirmation. `--purge` (`-Purge`
+on Windows) deletes them without asking. Only note directories are deleted, so a `PENSE_BETE_DIR`
 pointing at a folder with other files loses nothing else.
 
 ## Data
 
-- **Notes:** each note is a directory in `~/.local/share/pense-bete/`, holding
-  the note as `note.json` and its git repository:
-  `git -C ~/.local/share/pense-bete/<id> log` shows its history. Set
-  `PENSE_BETE_DIR` to store the notes elsewhere.
+- **Notes:** each note is a directory in `~/.local/share/pense-bete/`
+  (`%APPDATA%\pense-bete\notes\` on Windows), holding the note as `note.json`
+  and its git repository: `git -C ~/.local/share/pense-bete/<id> log` shows its
+  history. Set `PENSE_BETE_DIR` to store the notes elsewhere.
 - **Window state:** the open windows, their geometry, the recent notes and the
-  options are in `~/.config/pense-bete/session.json`, apart from the notes so
-  that moving a window never creates a commit.
+  options are in `~/.config/pense-bete/session.json`
+  (`%APPDATA%\pense-bete\session.json` on Windows), apart from the notes so that
+  moving a window never creates a commit.
 
 ## Development
 
@@ -213,7 +243,12 @@ The entry runs the code of the clone directly, so changes are picked up at the
 next launch; `./pense-bete` from the clone does the same, and **Restart** in the
 **⋮** menu, only there in development, relaunches it with the current code. `pense-bete-dev` is
 also available as a command. To remove the entry: `./install.sh --uninstall --dev`
-(the clone itself is kept).
+(the clone itself is kept). On Windows, `.\install.ps1 -Dev` and
+`.\install.ps1 -Uninstall -Dev` do the same with a Start menu entry; its data is in
+`%APPDATA%\pense-bete-dev\`.
+
+`icon.ico` and `icon-dev.ico`, for the Windows shortcuts, are built from the SVG
+icons: run `python3 tools/make_icons.py` after changing one.
 
 ### Releasing
 
@@ -240,7 +275,9 @@ pytest
 ```
 
 The tests run offscreen, in a throwaway home directory: they never touch the
-notes, settings or menu entries of the machine. GitHub runs them on every push.
+notes, settings or menu entries of the machine. GitHub runs them on every push,
+on Linux and on Windows, where `install.ps1` is tested; each system skips the
+other's installer tests.
 
 `PENSE_BETE_REPO` points updates and the standalone installer at another
 repository, such as a fork. `QT_QPA_PLATFORM=wayland` runs the application
