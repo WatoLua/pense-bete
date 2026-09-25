@@ -218,3 +218,43 @@ def test_a_new_note_clears_the_search(main_window, store):
 
     assert main_window.search.text() == ""
     assert len(listed(main_window)) == 2
+
+
+def test_a_zoomed_note_keeps_its_text_size(main_window, store):
+    add_note(main_window, store, "a", "Big", "")
+    main_window.open_note("a")
+    main_window.windows["a"].set_font_size(20)
+    main_window.windows["a"].close()
+
+    main_window.open_note("a")
+
+    assert main_window.windows["a"].font_size == 20
+    main_window.windows["a"].set_font_size(13)
+    assert main_window.session.get("font_sizes", None) == {}
+
+
+def test_the_list_sorts_by_creation_last_edit_or_title(main_window, store):
+    add_note(main_window, store, "a", "banana", "")
+    add_note(main_window, store, "b", "Apple", "")
+    add_note(main_window, store, "c", "cherry", "")
+    main_window.notes[0].modified = "2026-03-01T00:00:00"
+    assert listed(main_window) == ["banana", "Apple", "cherry"]
+
+    main_window._set_sort_order("modified")
+    assert listed(main_window) == ["banana", "cherry", "Apple"]
+
+    main_window._set_sort_order("title")
+    assert listed(main_window) == ["Apple", "banana", "cherry"]
+    assert main_window.session.get("sort", None) == "title"
+
+
+def test_an_edit_moves_the_note_up_when_sorted_by_last_edit(main_window, store):
+    add_note(main_window, store, "a", "Old", "")
+    add_note(main_window, store, "b", "New", "")
+    main_window._set_sort_order("modified")
+    main_window.open_note("a")
+
+    main_window.windows["a"].content_edit.setPlainText("edited")
+    main_window.windows["a"].save()
+
+    assert listed(main_window)[0] == "Old"

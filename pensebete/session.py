@@ -11,7 +11,9 @@ class Session:
     """What is open across runs: windows and their geometry, recent notes, options.
 
     Keys: "background" (bool), "main_open" (bool), "open_notes", "recent" and "on_top"
-    (note ids, most recent first for "recent"), "geometries" (window key -> base64).
+    (note ids, most recent first for "recent"), "geometries" (window key -> base64),
+    "font_sizes" (note id -> pixels, for the zoomed notes only), "sort" (the list's order),
+    "retention_days" and "auto_update".
     """
 
     def __init__(self, path: Path):
@@ -36,6 +38,7 @@ class Session:
 
     def forget(self, note_id: str) -> None:
         self.data.get("geometries", {}).pop(note_id, None)
+        self.data.get("font_sizes", {}).pop(note_id, None)
         for key in ("open_notes", "recent", "on_top"):
             self.data[key] = [i for i in self.data.get(key, []) if i != note_id]
 

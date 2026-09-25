@@ -84,12 +84,15 @@ class Version:
 
 class Note:
     def __init__(self, note_id: str, title: str = "", color: str = DEFAULT_COLOR,
-                 content: str = "", created: str | None = None, deleted: str | None = None):
+                 content: str = "", created: str | None = None, deleted: str | None = None,
+                 modified: str | None = None):
         self.id = note_id
         self.title = title
         self.color = color
         self.content = content
         self.created = created or datetime.now().isoformat(timespec="seconds")
+        # When the note was last edited; absent from notes never edited since created.
+        self.modified = modified
         # When the note was deleted: it stays in the trash, restorable, until it expires.
         self.deleted = deleted
 
@@ -103,6 +106,8 @@ class Note:
     def to_dict(self) -> dict:
         data = {"id": self.id, "title": self.title, "color": self.color,
                 "content": self.content, "created": self.created}
+        if self.modified:
+            data["modified"] = self.modified
         if self.deleted:
             data["deleted"] = self.deleted
         return data
@@ -110,7 +115,12 @@ class Note:
     @classmethod
     def from_dict(cls, data: dict) -> "Note":
         return cls(data["id"], data.get("title", ""), data.get("color", DEFAULT_COLOR),
-                   data.get("content", ""), data.get("created"), data.get("deleted"))
+                   data.get("content", ""), data.get("created"), data.get("deleted"),
+                   data.get("modified"))
+
+    @property
+    def last_edited(self) -> str:
+        return self.modified or self.created
 
 
 class NoteStore:

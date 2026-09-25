@@ -1,4 +1,5 @@
 import pytest
+from PySide6.QtCore import Qt
 
 from conftest import commits
 from pensebete.note_window import NoteWindow
@@ -64,7 +65,8 @@ def test_title_and_color_changes_are_saved(window, store):
     note = store.load_all()[0]
     assert (note.title, note.color) == ("Renamed", "#b3e5fc")
     assert window.windowTitle() == "Renamed"
-    assert len(changes) == 2
+    assert len(changes) == 3  # the title, the color, then the save for the last edit
+    assert note.modified is not None
 
 
 def test_a_discarded_window_does_not_save(window, store):
@@ -176,3 +178,35 @@ def test_the_highlights_follow_the_typing_and_go_with_the_history(qtbot, window)
 
     window.history_button.setChecked(False)
     assert window.content_edit.extraSelections() == []
+
+
+def test_ctrl_and_the_wheel_zoom_the_text(qtbot, window):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+    zoomed = []
+    window.font_size_changed.connect(zoomed.append)
+    window.show()
+
+    def wheel(delta, modifiers):
+        viewport = window.content_edit.viewport()
+        QApplication.sendEvent(viewport, QWheelEvent(
+            QPointF(10, 10), QPointF(viewport.mapToGlobal(QPoint(10, 10))), QPoint(),
+            QPoint(0, delta), Qt.NoButton, modifiers, Qt.NoScrollPhase, False))
+
+    wheel(120, Qt.ControlModifier)
+    wheel(120, Qt.ControlModifier)
+    assert window.font_size == 15
+    wheel(-120, Qt.ControlModifier)
+    assert window.font_size == 14
+    wheel(120, Qt.NoModifier)  # scrolls, as usual
+    assert window.font_size == 14
+    assert "font-size: 14px" in window.styleSheet()
+    assert len(zoomed) == 3
+
+
+def test_the_text_size_stays_within_bounds(window):
+    window.set_font_size(100)
+    assert window.font_size == 40
+    window.set_font_size(1)
+    assert window.font_size == 8

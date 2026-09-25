@@ -26,6 +26,10 @@ TRANSLATIONS = {
     "confirm_delete": {
         "en": "Delete the note “{title}”?\nIt stays {days} days among the deleted notes.",
         "fr": "Supprimer le post-it « {title} » ?\nIl reste {days} jours dans les post-its supprimés."},
+    "sort_by": {"en": "Sort by", "fr": "Trier par"},
+    "sort_created": {"en": "Creation date", "fr": "Date de création"},
+    "sort_modified": {"en": "Last modified", "fr": "Dernière modification"},
+    "sort_title": {"en": "Title", "fr": "Titre"},
     "deleted_notes": {"en": "Deleted notes…", "fr": "Post-its supprimés…"},
     "trash_title": {"en": "Deleted notes", "fr": "Post-its supprimés"},
     "trash_empty": {"en": "No deleted notes.", "fr": "Aucun post-it supprimé."},

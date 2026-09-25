@@ -1,8 +1,9 @@
 """The window of one note, and its history panel."""
 
 import subprocess
+from datetime import datetime
 
-from PySide6.QtCore import QByteArray, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut, QTextCursor
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -22,7 +23,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import APP_NAME, AUTOSAVE_DELAY_MS, PALETTE
+from .config import (
+    APP_NAME, AUTOSAVE_DELAY_MS, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE, PALETTE,
+)
 from .diff import differences, utf16_ranges
 from .i18n import tr
 from .storage import Note, NoteStore, Version
@@ -59,6 +62,7 @@ class HistoryPanel(QFrame):
     def __init__(self):
         super().__init__()
         self.versions: list[Version] = []
+        self.font_size = DEFAULT_FONT_SIZE
 
         self.older_button = QToolButton()
         self.older_button.setText("◀")
@@ -154,7 +158,7 @@ class HistoryPanel(QFrame):
         foreground = text_color_for(version.color)
         self.setStyleSheet(
             f"QPlainTextEdit, QLabel#historyTitle {{ background: {version.color};"
-            f" color: {foreground}; border: none; font-size: 13px; }}"
+            f" color: {foreground}; border: none; font-size: {self.font_size}px; }}"
             " QLabel#historyTitle { font-weight: bold; font-size: 14px; padding: 2px; }"
         )
         self.shown.emit()
@@ -163,7 +167,8 @@ class HistoryPanel(QFrame):
 class NoteWindow(QWidget):
     """Editor window for a single note."""
 
-    changed = Signal(object)  # title or color changed, the list must be refreshed
+    changed = Signal(object)  # what the list shows changed: title, color or last edit
+    font_size_changed = Signal(object)  # the text was zoomed in or out
     closing = Signal(object)  # the window is closing, after its note was saved
     copy_requested = Signal(object)  # Version to copy into a new note
     on_top_changed = Signal(object)  # the "keep on top" button was toggled
@@ -254,6 +259,14 @@ class NoteWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.splitter)
 
+        # Zooming, as in a browser: Ctrl with the wheel, +, - or 0 to go back to the default.
+        self.content_edit.viewport().installEventFilter(self)
+        self.history.content.viewport().installEventFilter(self)
+        for keys, step in ((QKeySequence.ZoomIn, 1), ("Ctrl+=", 1), (QKeySequence.ZoomOut, -1)):
+            QShortcut(QKeySequence(keys), self, lambda step=step: self.zoom(step))
+        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.set_font_size(DEFAULT_FONT_SIZE))
+
+        self.font_size = DEFAULT_FONT_SIZE
         self.resize(320, 300)
         self._apply_color()
         self._update_window_title()
@@ -283,8 +296,29 @@ class NoteWindow(QWidget):
             f"NoteWindow, QPlainTextEdit, QLineEdit {{ background: {self.note.color};"
             f" color: {foreground}; }}"
             " QLineEdit { font-weight: bold; border: none; font-size: 14px; }"
-            " QPlainTextEdit { border: none; font-size: 13px; }"
+            f" QPlainTextEdit {{ border: none; font-size: {self.font_size}px; }}"
         )
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
+            if event.angleDelta().y():
+                self.zoom(1 if event.angleDelta().y() > 0 else -1)
+            return True
+        return super().eventFilter(watched, event)
+
+    def zoom(self, step: int) -> None:
+        self.set_font_size(self.font_size + step)
+
+    def set_font_size(self, size: int) -> None:
+        """The size of the text, in pixels, for this note and its history."""
+        size = max(MIN_FONT_SIZE, min(size, MAX_FONT_SIZE))
+        if size == self.font_size:
+            return
+        self.font_size = self.history.font_size = size
+        self._apply_color()
+        if self.history.isVisible():
+            self.history.select(self.history.combo.currentIndex())
+        self.font_size_changed.emit(self)
 
     def _update_window_title(self) -> None:
         self.setWindowTitle(self.note.display_title)
@@ -298,12 +332,14 @@ class NoteWindow(QWidget):
         if not self.dirty or self.discarded:
             return
         self.note.content = self.content_edit.toPlainText()
+        self.note.modified = datetime.now().isoformat(timespec="seconds")
         try:
             self.store.save(self.note, message or f'Update "{self.note.display_title}"')
         except (OSError, subprocess.CalledProcessError) as error:
             QMessageBox.warning(self, APP_NAME, tr("save_failed", error=error))
             return
         self.dirty = False
+        self.changed.emit(self.note)
         if self.history.isVisible():
             self._load_history()
 

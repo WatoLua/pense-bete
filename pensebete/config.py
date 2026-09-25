@@ -26,6 +26,10 @@ VERSION_FILE = APP_DIR / ".version"
 REPO_URL = os.environ.get("PENSE_BETE_REPO", "https://github.com/WatoLua/pense-bete.git")
 AUTOSAVE_DELAY_MS = 10_000
 DEFAULT_COLOR = "#fff59d"
+# The size of a note's text, in pixels, which each note can zoom.
+DEFAULT_FONT_SIZE = 13
+MIN_FONT_SIZE = 8
+MAX_FONT_SIZE = 40
 PALETTE = {
     "yellow": "#fff59d",
     "orange": "#ffcc80",

@@ -7,7 +7,7 @@ import unicodedata
 import uuid
 
 from PySide6.QtCore import QProcess, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QActionGroup, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from .config import (
-    APP_DIR, APP_NAME, DATA_DIR, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH, RECENT_NOTES,
+    APP_DIR, APP_NAME, DATA_DIR, DEFAULT_FONT_SIZE, DEFAULT_RETENTION_DAYS, DEV_MODE, ICON_PATH,
+    RECENT_NOTES,
 )
 from .i18n import tr
 from .note_window import NoteWindow
@@ -35,6 +36,14 @@ from .storage import Note, NoteStore, Version
 from .style import color_icon, text_color_for
 from .trash import TrashDialog
 from .updates import can_update, command_error, install_release, run_command, update_available
+
+
+# The orders of the list, as arguments to sorted().
+SORT_ORDERS = {
+    "created": {"key": lambda note: note.created},
+    "modified": {"key": lambda note: note.last_edited, "reverse": True},
+    "title": {"key": lambda note: (searchable(note.display_title), note.created)},
+}
 
 
 def searchable(text: str) -> str:
@@ -83,6 +92,14 @@ class MainWindow(QWidget):
         self.background_action.setCheckable(True)
         self.background_action.setChecked(session.get("background", False))
         self.background_action.toggled.connect(self._set_background)
+        sort_menu = options_menu.addMenu(tr("sort_by"))
+        sort_group = QActionGroup(sort_menu)
+        for key in SORT_ORDERS:
+            action = sort_menu.addAction(tr(f"sort_{key}"))
+            action.setCheckable(True)
+            action.setChecked(key == self.sort_order())
+            action.triggered.connect(lambda _=False, key=key: self._set_sort_order(key))
+            sort_group.addAction(action)
         options_menu.addSeparator()
         options_menu.addAction(tr("deleted_notes"), self.open_trash)
         options_menu.addSeparator()
@@ -148,11 +165,20 @@ class MainWindow(QWidget):
         text = searchable(f"{note.title}\n{content}")
         return all(word in text for word in words)
 
+    def sort_order(self) -> str:
+        order = self.session.get("sort", "created")
+        return order if order in SORT_ORDERS else "created"
+
+    def _set_sort_order(self, order: str) -> None:
+        self.session.set("sort", order)
+        self.session.write()
+        self.refresh_list()
+
     def refresh_list(self) -> None:
         selected = self.list.currentItem().data(Qt.UserRole) if self.list.currentItem() else None
         self.list.clear()
         words = searchable(self.search.text()).split()
-        for note in self.notes:
+        for note in sorted(self.notes, **SORT_ORDERS[self.sort_order()]):
             if note.deleted or not self._matches(note, words):
                 continue
             item = QListWidgetItem(note.display_title)
@@ -243,7 +269,8 @@ class MainWindow(QWidget):
         self.notes.append(note)
         self.search.clear()  # the new note, empty, would not match
         self.refresh_list()
-        self.list.setCurrentRow(self.list.count() - 1)
+        self.list.setCurrentRow(next(row for row in range(self.list.count())
+                                     if self.list.item(row).data(Qt.UserRole) == note.id))
         self.open_note(note.id)
         self.windows[note.id].title_edit.setFocus()
 
@@ -259,11 +286,13 @@ class MainWindow(QWidget):
             window.closing.connect(self._on_note_closing)
             window.copy_requested.connect(self.create_note)
             window.on_top_changed.connect(self._on_note_on_top_changed)
+            window.font_size_changed.connect(self._on_note_font_size_changed)
             window.setAttribute(Qt.WA_DeleteOnClose)
             geometry = self.session.geometry(note_id)
             if geometry is not None:
                 window.restoreGeometry(geometry)
             window.set_on_top(note_id in self.session.get("on_top", []))
+            window.set_font_size(self.session.get("font_sizes", {}).get(note_id, DEFAULT_FONT_SIZE))
             self.windows[note_id] = window
         window.show()
         window.raise_()
@@ -280,6 +309,14 @@ class MainWindow(QWidget):
             on_top.append(window.note.id)
         self.session.set("on_top", on_top)
         self.save_session()
+
+    def _on_note_font_size_changed(self, window: NoteWindow) -> None:
+        sizes = self.session.get("font_sizes", {})
+        sizes.pop(window.note.id, None)
+        if window.font_size != DEFAULT_FONT_SIZE:
+            sizes[window.note.id] = window.font_size
+        self.session.set("font_sizes", sizes)
+        self.session.write()
 
     def _on_note_closing(self, window: NoteWindow) -> None:
         if self.quitting:

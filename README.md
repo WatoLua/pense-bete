@@ -16,6 +16,11 @@ The interface is in French or English, following the system language.
   "Réunion". Enter opens the first note found, Escape clears the search.
 - A note's title and color (seven presets, or any color with **Other…**) are
   shown in the list.
+- **Sort by**, in the **⋮** menu, orders the list by creation date, last
+  modification (the latest first) or title.
+- Each note has its own text size: Ctrl with the mouse wheel, Ctrl++ or Ctrl+-
+  zoom it, Ctrl+0 goes back to the default. The size is kept for the next
+  launch.
 - The 📌 button keeps a note above the other windows; the pin stands upright
   while it is on.
 - Notes are saved automatically 10 seconds after the last change, and
