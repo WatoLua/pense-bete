@@ -95,6 +95,11 @@ In the main window, open the **⋮** menu and choose **Update**: Pense-bête che
 GitHub for a new version, installs it and offers to restart. Running the
 installation command again does the same. The notes are not touched.
 
+With **Update automatically at launch** checked in the same menu, Pense-bête
+looks for a new version each time it starts, in the background, and installs
+it; the new version runs from the next launch, which it offers to do at once.
+A failed check, when offline for instance, is silent.
+
 Installations older than the **⋮** menu are updated by running the installation
 command again. Notes saved before each note got its own repository are in a
 format this version does not read.

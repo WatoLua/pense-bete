@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -139,6 +140,10 @@ TRANSLATIONS = {
                        "fr": "Impossible de lire l'historique :\n{error}"},
     "quit": {"en": "Quit", "fr": "Quitter"},
     "update": {"en": "Update", "fr": "Mettre à jour"},
+    "auto_update": {"en": "Update automatically at launch",
+                    "fr": "Mettre à jour automatiquement au démarrage"},
+    "auto_updated": {"en": "{app} was updated; the new version runs from the next launch.",
+                     "fr": "{app} a été mis à jour : la nouvelle version s'appliquera au prochain démarrage."},
     "uninstall": {"en": "Uninstall", "fr": "Désinstaller"},
     "update_from_clone": {
         "en": "{app} runs from a git repository ({path}).\nUpdate it with git pull.",
@@ -173,17 +178,48 @@ def text_color_for(background: str) -> str:
     return "#000000" if luminance > 140 else "#ffffff"
 
 
+def run(*args: str) -> subprocess.CompletedProcess:
+    """Run a command, its output captured for error messages."""
+    return subprocess.run(args, capture_output=True, text=True, timeout=300)
+
+
 def run_command(*args: str) -> subprocess.CompletedProcess:
-    """Run a command with a busy cursor; its output is captured for error messages."""
+    """Run a command with a busy cursor, from the interface thread only."""
     QApplication.setOverrideCursor(Qt.WaitCursor)
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=300)
+        return run(*args)
     finally:
         QApplication.restoreOverrideCursor()
 
 
 def command_error(result: subprocess.CompletedProcess) -> str:
     return (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
+
+
+def can_update() -> bool:
+    # A clone is the user's own checkout: overwriting its files would clobber their work.
+    return not (APP_DIR / ".git").exists()
+
+
+def update_available(runner=run) -> bool:
+    """Whether the repository's HEAD differs from the installed commit."""
+    remote = runner("git", "ls-remote", REPO_URL, "HEAD")
+    if remote.returncode:
+        raise RuntimeError(command_error(remote))
+    latest = remote.stdout.split()[0] if remote.stdout.split() else ""
+    installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
+    return bool(latest) and latest != installed
+
+
+def install_latest(runner=run) -> None:
+    """Install the repository's HEAD over this installation; notes are not touched."""
+    with tempfile.TemporaryDirectory() as temporary:
+        source = Path(temporary) / "pense-bete"
+        result = runner("git", "clone", "--quiet", "--depth", "1", "--", REPO_URL, str(source))
+        if result.returncode == 0:
+            result = runner("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
+    if result.returncode:
+        raise RuntimeError(command_error(result))
 
 
 def color_icon(color: str) -> QIcon:
@@ -784,6 +820,8 @@ class TrashDialog(QDialog):
 
 
 class MainWindow(QWidget):
+    auto_updated = Signal()  # emitted from the update thread, handled in the interface one
+
     def __init__(self, store: NoteStore, session: Session, server: QLocalServer):
         super().__init__()
         self.store = store
@@ -817,6 +855,12 @@ class MainWindow(QWidget):
         options_menu.addAction(tr("deleted_notes"), self.open_trash)
         options_menu.addSeparator()
         options_menu.addAction(tr("update"), self.update_app)
+        self.auto_update_action = options_menu.addAction(tr("auto_update"))
+        self.auto_update_action.setCheckable(True)
+        self.auto_update_action.setChecked(session.get("auto_update", False))
+        self.auto_update_action.setEnabled(can_update())
+        self.auto_update_action.toggled.connect(self._set_auto_update)
+        self.auto_updated.connect(self._on_auto_updated)
         options_menu.addAction(tr("uninstall"), self.uninstall_app)
         options_menu.addSeparator()
         options_menu.addAction(tr("quit"), self.quit_app)
@@ -890,6 +934,11 @@ class MainWindow(QWidget):
         if connection is not None:
             connection.disconnectFromServer()
         self.show_main()
+
+    def _set_auto_update(self, enabled: bool) -> None:
+        # Only recorded: the check runs at the next launch.
+        self.session.set("auto_update", enabled)
+        self.session.write()
 
     def _set_background(self, enabled: bool) -> None:
         self.session.set("background", enabled)
@@ -1032,38 +1081,51 @@ class MainWindow(QWidget):
             window.save()
 
     def update_app(self) -> None:
-        # A clone is the user's own checkout: overwriting its files would clobber their work.
-        if (APP_DIR / ".git").exists():
+        if not can_update():
             QMessageBox.information(self, APP_NAME, tr("update_from_clone", path=APP_DIR))
             return
         try:
-            remote = run_command("git", "ls-remote", REPO_URL, "HEAD")
-            if remote.returncode:
-                raise RuntimeError(command_error(remote))
-            latest = remote.stdout.split()[0] if remote.stdout.split() else ""
-            installed = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else ""
-            if latest and latest == installed:
+            if not update_available(run_command):
                 QMessageBox.information(self, APP_NAME, tr("up_to_date"))
                 return
             if QMessageBox.question(self, tr("update"), tr("update_available")) != QMessageBox.Yes:
                 return
             self.save_all()
-            with tempfile.TemporaryDirectory() as temporary:
-                source = Path(temporary) / "pense-bete"
-                result = run_command("git", "clone", "--quiet", "--depth", "1", "--",
-                                     REPO_URL, str(source))
-                if result.returncode == 0:
-                    result = run_command("bash", str(source / "install.sh"), "--yes", str(APP_DIR))
-            if result.returncode:
-                raise RuntimeError(command_error(result))
+            install_latest(run_command)
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             QMessageBox.warning(self, APP_NAME, tr("update_failed", error=error))
             return
+        self._offer_restart()
+
+    def _offer_restart(self) -> None:
         if QMessageBox.question(self, tr("update"), tr("update_done")) == QMessageBox.Yes:
             # Closed first, so the new instance does not hand itself over to this one.
             self.server.close()
             self.quit_app()
             QProcess.startDetached(str(APP_DIR / "pense-bete"), [])
+
+    def auto_update(self) -> None:
+        """At launch, when enabled: update in a background thread, keeping the interface
+        free; failures such as being offline stay silent until the next launch."""
+        if not (self.auto_update_action.isChecked() and can_update()):
+            return
+
+        def check_and_install() -> None:
+            try:
+                if update_available():
+                    install_latest()
+                    self.auto_updated.emit()
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                print(f"Automatic update failed: {error}", file=sys.stderr)
+
+        threading.Thread(target=check_and_install, daemon=True).start()
+
+    def _on_auto_updated(self) -> None:
+        # The files are replaced; this process keeps running the version it loaded.
+        if self.tray.isVisible() and not self.isVisible():
+            self.tray.showMessage(APP_NAME, tr("auto_updated"), QIcon(str(ICON_PATH)))
+        else:
+            self._offer_restart()
 
     def uninstall_app(self) -> None:
         box = QMessageBox(QMessageBox.Question, tr("uninstall"), tr("confirm_uninstall"),
@@ -1157,6 +1219,7 @@ def main() -> None:
 
     window = MainWindow(NoteStore(DATA_DIR), Session(SESSION_FILE), server)
     window.restore_session()
+    window.auto_update()
     sys.exit(app.exec())
 
 
