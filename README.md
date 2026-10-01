@@ -176,7 +176,7 @@ The installer:
 1. asks whether to install the standalone version — press Enter for yes, the
    default; answer no to use this computer's Python, which it then checks, with
    PySide6, offering to install it with pip;
-2. downloads the newest release, about 60 MB for the standalone version;
+2. downloads the newest release, about 75 MB for the standalone version;
 3. asks where to install it — press Enter to keep the default,
    `~/.local/opt/pense-bete`;
 4. adds **Pense-bête** to the GNOME application menu, and a `pense-bete`

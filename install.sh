@@ -272,7 +272,7 @@ check_dependencies() {
         # and downloads over HTTPS only.
         if [[ -z "$WITH_PYTHON" ]]; then
             if [[ -n "$STANDALONE" ]] || ! command -v python3 >/dev/null \
-                    || ask_yes "$(t "Install the standalone version (recommended)? It carries Python and its libraries (about 60 MB); answer no to use this computer's Python instead." "Installer la version autonome (recommandé) ? Elle inclut Python et ses bibliothèques (environ 60 Mo) ; répondez non pour utiliser le Python de cet ordinateur.")"; then
+                    || ask_yes "$(t "Install the standalone version (recommended)? It carries Python and its libraries (about 75 MB); answer no to use this computer's Python instead." "Installer la version autonome (recommandé) ? Elle inclut Python et ses bibliothèques (environ 75 Mo) ; répondez non pour utiliser le Python de cet ordinateur.")"; then
                 download_bundle
             fi
         fi
