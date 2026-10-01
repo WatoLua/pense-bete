@@ -40,10 +40,10 @@ def install_ps1(profile, *args, repo=None, piped=False, path=None, api=None):
     if api is not None:
         env["PENSE_BETE_API"] = api
     script = REPO_DIR / "install.ps1"
-    if piped and args:  # as `& ([scriptblock]::Create((irm ...))) <args>` does
+    if piped and args:  # as `. ([scriptblock]::Create((irm ...))) <args>` does
         quoted = " ".join(arg if arg.startswith("-") else f"'{arg}'" for arg in args)
         command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                   f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{script}'))) {quoted}"]
+                   f". ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{script}'))) {quoted}"]
     elif piped:
         command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                    f"Get-Content -Raw -LiteralPath '{script}' | Invoke-Expression"]

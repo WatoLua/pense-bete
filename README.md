@@ -210,10 +210,10 @@ offering to install PySide6 with pip. It downloads the newest release, about
 keep the default, `%LOCALAPPDATA%\Programs\pense-bete` — and adds **Pense-bête**
 to the Start menu. Its windows are grouped under that entry in the taskbar,
 where it can be pinned. `-Standalone` or `-WithPython` choose without being
-asked:
+asked, given this way — the leading dot runs the script as `iex` does:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1))) -WithPython
+. ([scriptblock]::Create((irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1))) -WithPython
 ```
 
 From a clone of the repository:

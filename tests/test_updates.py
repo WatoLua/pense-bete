@@ -5,6 +5,7 @@ import zipfile
 
 import pytest
 
+from conftest import posix_only
 from pensebete import updates
 
 
@@ -292,6 +293,7 @@ def test_an_update_of_the_standalone_build_is_unpacked_for_the_installer(monkeyp
     updates.remove_tree(staged.parent)
 
 
+@posix_only  # Windows has no permission to run a file
 def test_the_linux_build_is_unpacked_with_its_executable_runnable(monkeypatch):
     import io
     import tarfile
