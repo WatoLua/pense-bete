@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 WINDOWS = sys.platform == "win32"
-# Built by PyInstaller into an executable that carries Python and PySide6, for Windows
-# machines without Python.
+# Built by PyInstaller into an executable that carries Python and PySide6: the standalone
+# version, which the installers install by default.
 FROZEN = bool(getattr(sys, "frozen", False))
 # The directory holding the launcher, or the executable, and the installers.
 APP_DIR = (Path(sys.executable) if FROZEN else Path(__file__)).resolve().parent
@@ -18,7 +18,7 @@ if not FROZEN:
 # notes, menu entry and window class, apart from the installed application.
 DEV_MODE = not FROZEN and (APP_DIR / ".git").exists()
 # The executable of the standalone build, in its directory.
-EXECUTABLE_NAME = "Pense-bete.exe"
+EXECUTABLE_NAME = "Pense-bete.exe" if WINDOWS else "pense-bete"
 APP_ID = "pense-bete-dev" if DEV_MODE else "pense-bete"
 APP_NAME = "Pense-bête (dev)" if DEV_MODE else "Pense-bête"
 # The notes, and the window state kept apart from them so that moving a window never

@@ -142,21 +142,24 @@ an import never overwrites anything.
 
 ## Requirements
 
-- Python 3.10+ — on Windows, from [python.org](https://www.python.org/downloads/),
-  or none with the standalone version
+The installers install the **standalone version** by default: the application
+with Python and PySide6 inside, nothing else to install. It is built for every
+release and attached to it on GitHub. Beside it:
+
 - git, for the history of the notes — on Windows,
   [Git for Windows](https://git-scm.com/download/win). Without it, everything else
-  works: notes are saved without history, and the installer and updates download
-  the releases from GitHub.
-- PySide6 (`pip install PySide6-Essentials`) — the installer offers to install it
+  works: notes are saved without history.
+- On Linux, `curl` or `wget` to download it, and a desktop of the last few years:
+  the build runs where glibc is 2.35 or newer (Ubuntu 22.04, Debian 12,
+  Fedora 36 and later). For the top bar icon, GNOME needs the AppIndicator
+  extension, enabled by default on Ubuntu (`ubuntu-appindicators`).
 
-On Linux:
-
-- `libxcb-cursor0` (`sudo apt install libxcb-cursor0`), so that windows reopen
-  where they were. Without it the application runs under Wayland, which leaves
-  window placement to GNOME: sizes are restored, positions are not.
-- For the top bar icon, GNOME needs the AppIndicator extension, enabled by
-  default on Ubuntu (`ubuntu-appindicators`).
+Installed with this computer's Python instead (`--with-python`, `-WithPython`
+on Windows), the application needs Python 3.10+ and PySide6
+(`pip install PySide6-Essentials`, which the installer offers to run) and, on
+Linux, `libxcb-cursor0` (`sudo apt install libxcb-cursor0`), so that windows
+reopen where they were: without it the application runs under Wayland, which
+leaves window placement to GNOME. The standalone version carries it.
 
 ## Installation
 
@@ -170,9 +173,10 @@ curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh 
 
 The installer:
 
-1. checks that `python3` and `git` are available, warns if `libxcb-cursor0` is
-   missing, and offers to install PySide6 with pip if it is missing;
-2. downloads the newest release of the application;
+1. asks whether to install the standalone version — press Enter for yes, the
+   default; answer no to use this computer's Python, which it then checks, with
+   PySide6, offering to install it with pip;
+2. downloads the newest release, about 60 MB for the standalone version;
 3. asks where to install it — press Enter to keep the default,
    `~/.local/opt/pense-bete`;
 4. adds **Pense-bête** to the GNOME application menu, and a `pense-bete`
@@ -181,13 +185,15 @@ The installer:
 Then launch it from the application menu: search for "Pense-bête". If it does
 not show up right away, log out and back in.
 
-To choose the directory without being asked, pass it after `bash -s --`:
+Options go after `bash -s --`: a directory to install into without being asked,
+`--standalone` or `--with-python` to choose without being asked:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash -s -- ~/apps/pense-bete
+curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash -s -- --standalone ~/apps/pense-bete
 ```
 
-From a clone of the repository, `./install.sh` does the same.
+From a clone of the repository, `./install.sh` installs that clone's files,
+with this computer's Python.
 
 ### Windows
 
@@ -197,36 +203,34 @@ Run this in PowerShell:
 irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1 | iex
 ```
 
-The installer checks that Python and git are available, offers to install
-PySide6 with pip if it is missing, downloads the newest release, asks where to
-install it — press Enter to keep the default, `%LOCALAPPDATA%\Programs\pense-bete`
-— and adds **Pense-bête** to the Start menu. Its windows are grouped under that
-entry in the taskbar, where it can be pinned.
-
-Without Python, it offers the **standalone version** instead: `Pense-bete.exe`,
-about 40 MB, with Python and PySide6 inside, nothing else to install. It is built
-for every release and attached to it on GitHub, a few minutes after the release
-is tagged. Where Python is installed, the installer asks whether to install
-the standalone version anyway (default no); `-Standalone` chooses it without
-asking:
+The installer asks whether to install the standalone version — Enter for yes,
+the default; answer no to use this computer's Python, which it then checks,
+offering to install PySide6 with pip. It downloads the newest release, about
+40 MB for the standalone version, asks where to install it — press Enter to
+keep the default, `%LOCALAPPDATA%\Programs\pense-bete` — and adds **Pense-bête**
+to the Start menu. Its windows are grouped under that entry in the taskbar,
+where it can be pinned. `-Standalone` or `-WithPython` choose without being
+asked:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1))) -Standalone
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1))) -WithPython
 ```
-
-The standalone version downloads over HTTPS only, through the system's proxy,
-and looks for its updates the same way, even on a machine that has git: it
-suits office networks that let the browser out but not git. It updates and
-uninstalls from its **⋮** menu as the other does:
-since Windows cannot replace a running program, it closes, its installer puts
-the new files in place and starts it again. The installer's report is in
-`%TEMP%\pense-bete-install.log`.
 
 From a clone of the repository:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Target <directory>]
 ```
+
+### The standalone version
+
+It downloads over HTTPS only, through the system's proxy, and looks for its
+updates the same way, even on a machine that has git: it suits office networks
+that let the browser out but not git. It updates and uninstalls from its **⋮**
+menu as the other does: it closes, its installer puts the new files in place
+and starts it again, since a running build cannot have its files replaced. The
+installer's report is in `%TEMP%\pense-bete-install.log` on Windows,
+`/tmp/pense-bete-install.log` on Linux.
 
 ### Updating
 
@@ -326,14 +330,18 @@ A tag made without `-a` works as well, only without notes.
 Until the repository has a release, the installer takes the latest commit of the
 default branch, and the application finds no update.
 
-### Windows build
+### Standalone builds
 
 `tools/build_windows.ps1` builds the standalone version with PyInstaller into
 `dist\Pense-bete`, checks it with `Pense-bete.exe --self-test <report>`, which
 starts what a launch starts in throwaway directories, and packs it as
-`dist\pense-bete-windows.zip`. The **Release** workflow runs it for every
-`vX.Y.Z` tag and attaches the archive to the tag's GitHub release; started by
-hand from the Actions tab, it only builds and checks.
+`dist\pense-bete-windows.zip`. `tools/build_linux.sh` does the same on Linux,
+into `dist/pense-bete` and `dist/pense-bete-linux.tar.gz`, once PyInstaller is
+installed (`python3 -m pip install pyinstaller -r requirements.txt`). The
+**Release** workflow runs both for every `vX.Y.Z` tag, the Linux one on Ubuntu
+22.04 so that the build runs on the systems since, and publishes the release
+with both archives once they are built; started by hand from the Actions tab,
+it only builds and checks.
 
 ### Tests
 

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -125,7 +126,7 @@ def installer(directory: Path, *options: str, target: Path | None = None,
     "uninstall": install.sh on Linux, install.ps1 on Windows, each with its own syntax.
 
     A release's tag and commit are passed on for the installer to record, which it
-    cannot ask git for in a downloaded archive. wait_pid, on Windows, has it wait for
+    cannot ask git for in a downloaded archive. wait_pid has it wait for
     that process to end first.
     """
     values = {"commit": release.commit, "release": release.tag} if release else {}
@@ -182,6 +183,17 @@ def extract_archive(data: bytes, target: Path) -> None:
             shutil.move(str(top), str(target))
 
 
+def extract_tar(data: bytes, target: Path) -> None:
+    """Unpack the Linux standalone build, all in one top directory, into target, the
+    permissions of its executable kept."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+        with tempfile.TemporaryDirectory() as temporary:
+            # "data" refuses absolute paths, ".." and links leading out of the directory.
+            archive.extractall(temporary, filter="data")
+            [top] = Path(temporary).iterdir()
+            shutil.move(str(top), str(target))
+
+
 def release_notes(release: Release, runner=run, fetcher=http_get) -> str:
     """The message of a release's annotated tag, "" for a tag without one or when it
     cannot be read: the notes are a bonus, never a reason for an update to fail."""
@@ -209,7 +221,9 @@ def release_notes(release: Release, runner=run, fetcher=http_get) -> str:
         return result.stdout.strip() if result.returncode == 0 else ""
 
 
-BUNDLE_ASSET = "pense-bete-windows.zip"
+# The standalone build's archive attached to each release: a zip for Windows, a tar for
+# Linux, which keeps the executable's permissions.
+BUNDLE_ASSET = "pense-bete-windows.zip" if WINDOWS else "pense-bete-linux.tar.gz"
 # What the installer an update hands over to reports, since it runs without a window.
 HANDOVER_LOG = Path(tempfile.gettempdir()) / "pense-bete-install.log"
 
@@ -230,12 +244,17 @@ def bundle_url(release: Release, fetcher=http_get) -> str:
 
 def stage_update(release: Release, fetcher=http_get) -> Path:
     """Download and unpack a release's standalone build, for the installer to put in
-    place once the application has quit: Windows forbids replacing a running program.
+    place once the application has quit: Windows forbids replacing a running program,
+    and on Linux, the running build still reads its modules from its own files.
     Returns its directory, which the installer removes afterwards."""
     staging = Path(tempfile.mkdtemp(prefix="pense-bete-update-"))
     try:
-        extract_archive(fetcher(bundle_url(release, fetcher)), staging / "Pense-bete")
-    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as error:
+        data = fetcher(bundle_url(release, fetcher))
+        if BUNDLE_ASSET.endswith(".zip"):
+            extract_archive(data, staging / "Pense-bete")
+        else:
+            extract_tar(data, staging / "Pense-bete")
+    except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError, RuntimeError) as error:
         remove_tree(staging)
         raise RuntimeError(str(error)) from error
     return staging / "Pense-bete"
@@ -247,7 +266,8 @@ def hand_over(command: list[str]) -> None:
     with open(HANDOVER_LOG, "w", encoding="utf-8") as log:
         subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                         start_new_session=not WINDOWS)  # out of the application's group
 
 
 def git_version(runner=run) -> str:

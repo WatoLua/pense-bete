@@ -265,6 +265,7 @@ def test_an_archive_that_climbs_out_is_refused(installed):
 
 def test_the_standalone_build_is_found_among_the_release_assets(monkeypatch):
     monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    monkeypatch.setattr(updates, "BUNDLE_ASSET", "pense-bete-windows.zip")
     release = updates.Release("v1.0.0", "c")
     fetcher = fake_github({f"{API}/releases/tags/v1.0.0": {"assets": [
         {"name": "other.zip", "browser_download_url": "other"},
@@ -277,6 +278,7 @@ def test_the_standalone_build_is_found_among_the_release_assets(monkeypatch):
 
 def test_an_update_of_the_standalone_build_is_unpacked_for_the_installer(monkeypatch):
     monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    monkeypatch.setattr(updates, "BUNDLE_ASSET", "pense-bete-windows.zip")
     release = updates.Release("v1.0.0", "c")
     fetcher = fake_github({
         f"{API}/releases/tags/v1.0.0": {"assets": [
@@ -288,6 +290,39 @@ def test_an_update_of_the_standalone_build_is_unpacked_for_the_installer(monkeyp
 
     assert (staged / "Pense-bete.exe").read_text() == "exe"
     updates.remove_tree(staged.parent)
+
+
+def test_the_linux_build_is_unpacked_with_its_executable_runnable(monkeypatch):
+    import io
+    import tarfile
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    monkeypatch.setattr(updates, "BUNDLE_ASSET", "pense-bete-linux.tar.gz")
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as output:
+        for name, mode in (("pense-bete/pense-bete", 0o755), ("pense-bete/install.sh", 0o755),
+                           ("pense-bete/_internal/lib.so", 0o644)):
+            member = tarfile.TarInfo(name)
+            member.size, member.mode = 2, mode
+            output.addfile(member, io.BytesIO(b"ok"))
+    fetcher = fake_github({
+        f"{API}/releases/tags/v1.0.0": {"assets": [
+            {"name": "pense-bete-linux.tar.gz", "browser_download_url": "the-build"}]},
+        "the-build": archive.getvalue(),
+    })
+
+    staged = updates.stage_update(updates.Release("v1.0.0", "c"), fetcher)
+
+    assert (staged / "pense-bete").stat().st_mode & 0o111
+    assert (staged / "_internal" / "lib.so").read_bytes() == b"ok"
+    updates.remove_tree(staged.parent)
+
+
+def test_the_linux_installer_waits_for_the_application_too(monkeypatch, tmp_path):
+    monkeypatch.setattr(updates, "WINDOWS", False)
+
+    command = updates.installer(tmp_path, "yes", "launch", target=tmp_path / "app", wait_pid=42)
+
+    assert command[-3:] == ["--launch", "--waitpid=42", str(tmp_path / "app")]
 
 
 def test_the_installer_can_wait_for_the_application_to_end(monkeypatch, tmp_path):

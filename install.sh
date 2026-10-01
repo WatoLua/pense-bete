@@ -7,9 +7,14 @@
 #        ./install.sh --dev           register this clone as "Pense-bête (dev)"
 #        --yes                        ask nothing, take the default answers
 #        --commit=<sha> --release=<tag>  what is installed, for a copy without git
+#        --standalone                 the standalone version, without asking
+#        --with-python                this computer's Python rather than the standalone version
+#        --waitpid=<pid> --launch     wait for that process to end before installing,
+#                                     then launch the application: for its own updates
 #
 # Also runs on its own, without a clone of the repository; it then installs the newest
-# release, the highest vX.Y.Z tag:
+# release, the highest vX.Y.Z tag, by default as the standalone version, which carries
+# Python and PySide6:
 #   curl -fsSL https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.sh | bash
 set -euo pipefail
 
@@ -20,6 +25,11 @@ PURGE=""
 DEV=""
 COMMIT=""
 RELEASE=""
+STANDALONE=""
+WITH_PYTHON=""
+WAIT_PID=""
+LAUNCH=""
+REMOVE_SOURCE=""
 for arg in "$@"; do
     case "$arg" in
         --uninstall) ACTION=uninstall ;;
@@ -28,6 +38,11 @@ for arg in "$@"; do
         -y|--yes) ASSUME_YES=1 ;;
         --commit=*) COMMIT="${arg#--commit=}" ;;
         --release=*) RELEASE="${arg#--release=}" ;;
+        --standalone) STANDALONE=1 ;;
+        --with-python) WITH_PYTHON=1 ;;
+        --waitpid=*) WAIT_PID="${arg#--waitpid=}" ;;
+        --launch) LAUNCH=1 ;;
+        --removesource) REMOVE_SOURCE=1 ;;
         -h|--help) ACTION=help ;;
         *) TARGET="$arg" ;;
     esac
@@ -38,12 +53,25 @@ done
 APP_ID="pense-bete${DEV:+-dev}"
 APP_NAME="Pense-bête${DEV:+ (dev)}"
 REPO_URL="${PENSE_BETE_REPO:-https://github.com/WatoLua/pense-bete.git}"
-# Empty when the script is piped into bash: the sources are then cloned from REPO_URL.
+# The standalone build's archive attached to each release, and its executable.
+BUNDLE_ASSET="pense-bete-linux.tar.gz"
+EXECUTABLE=pense-bete
+is_bundle() {  # is_bundle <dir>: whether it holds a standalone build
+    [[ -f "$1/$EXECUTABLE" && -d "$1/_internal" && ! -f "$1/pense_bete.py" ]]
+}
+# What to install: the sources, or a standalone build (BUNDLE), beside this script.
+# Empty when the script is piped into bash: they are then downloaded.
 SOURCE_DIR=""
+BUNDLE=""
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     SOURCE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-    [[ -f "$SOURCE_DIR/pense_bete.py" ]] || SOURCE_DIR=""
+    if is_bundle "$SOURCE_DIR"; then
+        BUNDLE=1
+    elif [[ ! -f "$SOURCE_DIR/pense_bete.py" ]]; then
+        SOURCE_DIR=""
+    fi
 fi
+WORK_DIR=""  # for downloads, deleted on exit
 DEFAULT_DIR="$HOME/.local/opt/$APP_ID"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID.desktop"
 BIN_LINK="$HOME/.local/bin/$APP_ID"
@@ -124,7 +152,7 @@ uninstall() {
     # the user's own checkout, so only the menu entry and the command are removed.
     if [[ -n "$install_dir" && -e "$install_dir/.git" ]]; then
         warn "$(t "$install_dir is a git repository, it is kept." "$install_dir est un dépôt git, il est conservé.")"
-    elif [[ -n "$install_dir" && -f "$install_dir/pense_bete.py" ]]; then
+    elif [[ -n "$install_dir" && ( -f "$install_dir/pense_bete.py" || -d "$install_dir/_internal" ) ]]; then
         if ask_yes "$(t "Delete $install_dir?" "Supprimer $install_dir ?")"; then
             rm -rf -- "$install_dir"
         fi
@@ -182,20 +210,82 @@ print(tag["name"], tag["commit"]["sha"])
 PYTHON
 }
 
+# The newest release's standalone build: GitHub sends this address on to the asset of
+# the latest release, which is published with its builds. PENSE_BETE_API stands in for
+# GitHub in the tests.
+bundle_url() {
+    local url="${REPO_URL%/}"
+    url="${url%.git}"
+    if [[ -n "${PENSE_BETE_API:-}" ]]; then
+        printf '%s/releases/latest/download/%s' "${PENSE_BETE_API%/}" "$BUNDLE_ASSET"
+    elif [[ "$url" =~ ^https://github\.com/[^/]+/[^/]+$ ]]; then
+        printf '%s/releases/latest/download/%s' "$url" "$BUNDLE_ASSET"
+    fi
+}
+
+# The standalone build, into $SOURCE_DIR: it carries its .version and .release.
+download_bundle() {
+    local url
+    url="$(bundle_url)"
+    [[ -n "$url" ]] || fail "$(t "The standalone version is only published on GitHub; use --with-python." "La version autonome n'est publiée que sur GitHub ; utilisez --with-python.")"
+    info "$(t "Downloading the standalone version of Pense-bête from $REPO_URL" "Téléchargement de la version autonome de Pense-bête depuis $REPO_URL")"
+    mkdir -p -- "$WORK_DIR/download"
+    if command -v curl >/dev/null; then
+        curl -fL --progress-bar -- "$url" | tar -xz -C "$WORK_DIR/download" \
+            || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
+    elif command -v wget >/dev/null; then
+        wget -qO- -- "$url" | tar -xz -C "$WORK_DIR/download" \
+            || fail "$(t "Could not download the application." "Impossible de télécharger l'application.")"
+    else
+        fail "$(t "curl or wget is needed to download the application." "curl ou wget est nécessaire pour télécharger l'application.")"
+    fi
+    SOURCE_DIR="$WORK_DIR/download/$EXECUTABLE"
+    is_bundle "$SOURCE_DIR" || fail "$(t "The download is not a standalone version of the application." "Le téléchargement n'est pas une version autonome de l'application.")"
+    BUNDLE=1
+    RELEASE="${RELEASE:-$(cat -- "$SOURCE_DIR/.release" 2>/dev/null || true)}"
+    info "$(t "Pense-bête ${RELEASE:-} downloaded" "Pense-bête ${RELEASE:-} téléchargé")"
+}
+
 latest_release() {  # the newest vX.Y.Z tag of REPO_URL, empty when it has none
     git ls-remote --tags --refs -- "$REPO_URL" 'refs/tags/v*' 2>/dev/null \
         | sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' \
         | sort -V | tail -n 1
 }
 
+# Only a warning: without it the application runs under Wayland, which does not restore
+# window positions. A standalone build carries it when it was built where it was.
+warn_without_xcb_cursor() {
+    if [[ ! ( -n "$BUNDLE" && -e "$SOURCE_DIR/_internal/libxcb-cursor.so.0" ) ]] \
+            && ! ldconfig -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
+        warn "$(t "libxcb-cursor0 is missing: windows will not reopen where they were. Install it with: sudo apt install libxcb-cursor0" "libxcb-cursor0 est absent : les fenêtres ne se rouvriront pas à leur place. Installez-le avec : sudo apt install libxcb-cursor0")"
+    fi
+}
+
 check_dependencies() {
-    command -v python3 >/dev/null || fail "$(t "python3 not found, please install it first." "python3 est introuvable, installez-le d'abord.")"
     # Only a warning: without git, notes are saved without history.
     command -v git >/dev/null || warn "$(t "git is not installed: notes will be saved without history. Install git to keep it." "git n'est pas installé : les post-its seront sauvegardés sans historique. Installez git pour le garder.")"
 
     if [[ -z "$SOURCE_DIR" ]]; then
-        SOURCE_DIR="$(mktemp -d)"
-        trap 'rm -rf -- "$SOURCE_DIR"' EXIT
+        WORK_DIR="$(mktemp -d)"
+        trap 'rm -rf -- "$WORK_DIR"' EXIT
+        # The standalone version by default: it needs neither Python nor its libraries,
+        # and downloads over HTTPS only.
+        if [[ -z "$WITH_PYTHON" ]]; then
+            if [[ -n "$STANDALONE" ]] || ! command -v python3 >/dev/null \
+                    || ask_yes "$(t "Install the standalone version (recommended)? It carries Python and its libraries (about 60 MB); answer no to use this computer's Python instead." "Installer la version autonome (recommandé) ? Elle inclut Python et ses bibliothèques (environ 60 Mo) ; répondez non pour utiliser le Python de cet ordinateur.")"; then
+                download_bundle
+            fi
+        fi
+    fi
+    if [[ -n "$BUNDLE" ]]; then
+        warn_without_xcb_cursor
+        return
+    fi
+    command -v python3 >/dev/null || fail "$(t "python3 not found, please install it first." "python3 est introuvable, installez-le d'abord.")"
+
+    if [[ -z "$SOURCE_DIR" ]]; then
+        SOURCE_DIR="$WORK_DIR/source"
+        mkdir -- "$SOURCE_DIR"
         if command -v git >/dev/null; then
             local release
             release="$(latest_release)"
@@ -219,11 +309,7 @@ check_dependencies() {
         fi
     fi
 
-    # Only a warning: without it the application runs under Wayland, which does not
-    # restore window positions.
-    if ! ldconfig -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
-        warn "$(t "libxcb-cursor0 is missing: windows will not reopen where they were. Install it with: sudo apt install libxcb-cursor0" "libxcb-cursor0 est absent : les fenêtres ne se rouvriront pas à leur place. Installez-le avec : sudo apt install libxcb-cursor0")"
-    fi
+    warn_without_xcb_cursor
 
     if python3 -c "import PySide6" 2>/dev/null; then
         return
@@ -255,22 +341,34 @@ install() {
     target="$(cd "$target" && pwd)"
 
     if [[ "$target" != "$SOURCE_DIR" ]]; then
-        if [[ -n "$(ls -A "$target")" && ! -f "$target/pense_bete.py" ]]; then
+        if [[ -n "$(ls -A "$target")" && ! -f "$target/pense_bete.py" && ! -f "$target/$EXECUTABLE" ]]; then
             ask_yes "$(t "$target is not empty, install anyway?" "$target n'est pas vide, installer quand même ?")" || fail "$(t "Installation cancelled." "Installation annulée.")"
         fi
         info "$(t "Copying files to $target" "Copie des fichiers dans $target")"
-        for file in "${FILES[@]}"; do
-            cp -- "$SOURCE_DIR/$file" "$target/"
+        # What an earlier installation put there goes first, of either kind, so that
+        # nothing of an earlier version is left behind, nor of the other kind.
+        for item in "${FILES[@]}" "$PACKAGE" _internal .version .release; do
+            rm -rf -- "${target:?}/$item"
         done
-        # Replaced as a whole, so that no module of an earlier version is left behind.
-        rm -rf -- "${target:?}/$PACKAGE"
-        mkdir -- "$target/$PACKAGE"
-        cp -- "$SOURCE_DIR/$PACKAGE"/*.py "$target/$PACKAGE/"
+        if [[ -n "$BUNDLE" ]]; then
+            cp -a -- "$SOURCE_DIR"/. "$target"/
+        else
+            for file in "${FILES[@]}"; do
+                cp -- "$SOURCE_DIR/$file" "$target/"
+            done
+            mkdir -- "$target/$PACKAGE"
+            cp -- "$SOURCE_DIR/$PACKAGE"/*.py "$target/$PACKAGE/"
+        fi
     fi
-    chmod +x "$target/pense-bete" "$target/pense_bete.py" "$target/install.sh"
+    chmod +x "$target/$EXECUTABLE" "$target/install.sh"
+    [[ -n "$BUNDLE" ]] || chmod +x "$target/pense_bete.py"
     # The installed commit, which the application compares with the repository to offer updates.
-    # Given by --commit and --release for a copy git cannot tell about, as an archive.
-    if [[ ! -e "$target/.git" ]]; then
+    # Given by --commit and --release for a copy git cannot tell about, as an archive; a
+    # standalone build carries its own.
+    if [[ -n "$BUNDLE" ]]; then
+        [[ -z "$COMMIT" ]] || printf '%s\n' "$COMMIT" > "$target/.version"
+        [[ -z "$RELEASE" ]] || printf '%s\n' "$RELEASE" > "$target/.release"
+    elif [[ ! -e "$target/.git" ]]; then
         local commit="$COMMIT" release="$RELEASE"
         [[ -n "$commit" ]] || commit="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
         # And the release it is, when the commit is one, for the About window.
@@ -311,10 +409,30 @@ EOF
     echo "$(t "    Launch it from the applications menu (search for \"$APP_NAME\")" "    Lancez-le depuis le menu des applications (cherchez « $APP_NAME »)")"
     echo "$(t "    or with the command: $APP_ID" "    ou avec la commande : $APP_ID")"
     echo "$(t "    To uninstall: $target/install.sh --uninstall${DEV:+ --dev}" "    Désinstallation : $target/install.sh --uninstall${DEV:+ --dev}")"
+
+    # For the application's own updates: the downloaded build goes, the new one starts.
+    if [[ -n "$REMOVE_SOURCE" && "$SOURCE_DIR" != "$target" ]]; then
+        rm -rf -- "$SOURCE_DIR"
+        rmdir -- "$(dirname "$SOURCE_DIR")" 2>/dev/null || true
+    fi
+    if [[ -n "$LAUNCH" ]]; then
+        setsid "$target/$EXECUTABLE" </dev/null >/dev/null 2>&1 &
+    fi
+}
+
+# The application hands its update or uninstallation over and quits: its files are
+# replaced once it is gone, two minutes at most. A process that has ended but that its
+# parent has not collected yet, a zombie, is gone too.
+wait_for_process() {
+    local tries=0
+    while [[ -n "$WAIT_PID" ]] && kill -0 "$WAIT_PID" 2>/dev/null \
+            && [[ "$(ps -o stat= -p "$WAIT_PID" 2>/dev/null)" != Z* ]] && (( tries++ < 240 )); do
+        sleep 0.5
+    done
 }
 
 case "$ACTION" in
-    uninstall) uninstall ;;
-    help) sed -n '2,9p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
-    install) install "$TARGET" ;;
+    uninstall) wait_for_process; uninstall ;;
+    help) sed -n '2,14p' "${BASH_SOURCE[0]:-$0}" | sed 's/^# \{0,1\}//' ;;
+    install) wait_for_process; install "$TARGET" ;;
 esac

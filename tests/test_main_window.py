@@ -356,7 +356,7 @@ def frozen(monkeypatch, tmp_path):
     from pensebete import updates
     from pensebete.updates import Release
     handed_over = []
-    monkeypatch.setattr(updates, "WINDOWS", True)  # the standalone build is Windows'
+    monkeypatch.setattr(updates, "WINDOWS", True)  # a Windows build, its installer's syntax
     monkeypatch.setattr(QMessageBox, "exec", lambda self: QMessageBox.Yes)
     staged = tmp_path / "staged" / "Pense-bete"
     staged.mkdir(parents=True)

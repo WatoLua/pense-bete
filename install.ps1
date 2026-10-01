@@ -12,12 +12,13 @@ The Windows counterpart of install.sh.
   -Yes                             ask nothing, take the default answers
   -Commit <sha> -Release <tag>     what is installed, for a copy without git
   -Standalone                      install the standalone version, which carries
-                                   Python: offered anyway when Python is missing
+                                   Python, without asking: the default
+  -WithPython                      use this computer's Python instead
   -WaitPid <pid> -Launch           wait for that process to end before installing,
                                    then launch the application: for its own updates
 
 Also runs on its own, without a clone of the repository; it then installs the newest
-release, the highest vX.Y.Z tag:
+release, the highest vX.Y.Z tag, by default as the standalone version:
   irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1 | iex
 #>
 [CmdletBinding()]
@@ -30,6 +31,7 @@ param(
     [string]$Commit = "",
     [string]$Release = "",
     [switch]$Standalone,
+    [switch]$WithPython,
     [int]$WaitPid = 0,
     [switch]$Launch,
     [switch]$RemoveSource
@@ -323,13 +325,10 @@ function Check-Dependencies {
         return
     }
     $script:Python = Find-Python
-    # Where Python is installed, the standalone version can still be chosen: it needs
-    # neither that Python nor its packages, and downloads over HTTPS only.
-    if (-not $SourceDir -and -not $Standalone -and $Python -and
-            (AskNo (T "Python is installed. Install the standalone version anyway, which does not use it (about 40 MB)?" "Python est install\u00e9. Installer quand m\u00eame la version autonome, qui ne l'utilise pas (environ 40 Mo) ?"))) {
-        $script:Standalone = $true
-    }
-    if (-not $SourceDir -and ($Standalone -or (-not $Python -and (AskYes (T "Python is not installed. Install the standalone version, which carries it (about 40 MB)?" "Python n'est pas install\u00e9. Installer la version autonome, qui l'inclut (environ 40 Mo) ?"))))) {
+    # The standalone version by default: it needs neither Python nor its packages, and
+    # downloads over HTTPS only, through the system's proxy.
+    if (-not $SourceDir -and -not $WithPython -and ($Standalone -or -not $Python -or
+            (AskYes (T "Install the standalone version (recommended)? It carries Python and its libraries (about 40 MB); answer no to use this computer's Python instead." "Installer la version autonome (recommand\u00e9) ? Elle inclut Python et ses biblioth\u00e8ques (environ 40 Mo) ; r\u00e9pondez non pour utiliser le Python de cet ordinateur.")))) {
         $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
         $script:Cleanup = $SourceDir
         Download-Bundle

@@ -40,7 +40,11 @@ def install_ps1(profile, *args, repo=None, piped=False, path=None, api=None):
     if api is not None:
         env["PENSE_BETE_API"] = api
     script = REPO_DIR / "install.ps1"
-    if piped:
+    if piped and args:  # as `& ([scriptblock]::Create((irm ...))) <args>` does
+        quoted = " ".join(arg if arg.startswith("-") else f"'{arg}'" for arg in args)
+        command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{script}'))) {quoted}"]
+    elif piped:
         command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                    f"Get-Content -Raw -LiteralPath '{script}' | Invoke-Expression"]
     else:
@@ -186,7 +190,7 @@ def test_the_development_entry_runs_the_clone_and_uninstalling_keeps_it(profile)
 def test_the_standalone_installer_installs_the_newest_release(profile, tagged_repo):
     repo, commits = tagged_repo
 
-    result = install_ps1(profile, repo=repo, piped=True)
+    result = install_ps1(profile, "-WithPython", repo=repo, piped=True)
 
     target = profile["LOCALAPPDATA"] / "Programs" / "pense-bete"
     assert "v1.10.0" in result.stdout
@@ -208,7 +212,7 @@ def test_without_git_the_standalone_installer_downloads_the_newest_release(
         profile, no_git_path, fake_github):
     api, commit = fake_github
 
-    result = install_ps1(profile, piped=True, path=no_git_path, api=api)
+    result = install_ps1(profile, "-WithPython", piped=True, path=no_git_path, api=api)
 
     target = profile["LOCALAPPDATA"] / "Programs" / "pense-bete"
     assert "git" in result.stdout  # warned that notes will have no history
@@ -312,3 +316,16 @@ def test_a_standalone_installation_is_uninstalled(profile, tmp_path, bundle):
 
     assert not target.exists()
     assert not shortcut(profile).exists()
+
+
+def test_the_standalone_version_is_installed_by_default(profile, fake_github):
+    api, commit = fake_github
+
+    result = install_ps1(profile, piped=True, api=api)
+
+    target = profile["LOCALAPPDATA"] / "Programs" / "pense-bete"
+    assert "v1.10.0" in result.stdout
+    assert (target / "Pense-bete.exe").is_file()
+    assert not (target / "pense_bete.py").exists()
+    assert (target / ".version").read_text().strip() == commit
+    assert read_shortcut(shortcut(profile))["target"] == str(target / "Pense-bete.exe")

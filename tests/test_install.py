@@ -159,7 +159,7 @@ def test_the_standalone_installer_installs_the_newest_release(home, tagged_repo)
     repo, commits = tagged_repo
     target = home / "app"
 
-    result = install_sh(home, str(target), repo=repo, piped=True)
+    result = install_sh(home, str(target), "--with-python", repo=repo, piped=True)
 
     assert "v1.10.0" in result.stdout
     assert (target / ".version").read_text().strip() == commits["v1.10.0"]
@@ -177,7 +177,7 @@ def test_the_standalone_installer_falls_back_to_the_latest_commit(home, tmp_path
         capture_output=True)
     target = home / "app"
 
-    result = install_sh(home, str(target), repo=repo, piped=True)
+    result = install_sh(home, str(target), "--with-python", repo=repo, piped=True)
 
     assert "no release" in result.stderr
     assert (target / "pense_bete.py").is_file()
@@ -198,7 +198,8 @@ def test_without_git_the_standalone_installer_downloads_the_newest_release(
     api, commit = fake_github
     target = home / "app"
 
-    result = install_sh(home, str(target), piped=True, path=no_git_path, api=api)
+    result = install_sh(home, str(target), "--with-python", piped=True, path=no_git_path,
+                        api=api)
 
     assert "git" in result.stderr  # warned that notes will have no history
     assert "v1.10.0" in result.stdout
@@ -212,9 +213,96 @@ def test_without_git_a_repository_off_github_cannot_be_downloaded(home, no_git_p
            if not key.startswith(("XDG_", "PENSE_BETE_"))}
     env.update(HOME=str(home), PATH=no_git_path, PENSE_BETE_REPO="/srv/git/pense-bete.git")
 
-    result = subprocess.run(["bash", "-s", "--", "--yes", str(home / "app")], env=env,
-                            input=(REPO_DIR / "install.sh").read_text(), capture_output=True,
-                            text=True)
+    def piped(*args):
+        return subprocess.run(["bash", "-s", "--", "--yes", *args, str(home / "app")], env=env,
+                              input=(REPO_DIR / "install.sh").read_text(),
+                              capture_output=True, text=True)
 
+    result = piped("--with-python")
     assert result.returncode != 0
     assert "needs git" in result.stderr
+    result = piped()  # the standalone version is only published on GitHub
+    assert result.returncode != 0
+    assert "--with-python" in result.stderr
+
+
+def test_the_standalone_version_is_installed_by_default(home, fake_github):
+    api, commit = fake_github
+    target = home / "app"
+
+    result = install_sh(home, str(target), piped=True, api=api)
+
+    assert "v1.10.0" in result.stdout
+    assert os.access(target / "pense-bete", os.X_OK)
+    assert (target / "_internal" / "libpython3.12.so.1.0").is_file()
+    assert not (target / "pense_bete.py").exists()
+    assert (target / ".version").read_text().strip() == commit  # carried by the build
+    assert (target / ".release").read_text().strip() == "v1.10.0"
+    assert f"Exec={target}/pense-bete" in desktop_file(home).read_text()
+    assert (home / ".local" / "bin" / "pense-bete").resolve() == target / "pense-bete"
+
+
+@pytest.fixture
+def linux_bundle(tmp_path):
+    """A standalone build unpacked, as an update hands it over to its installer."""
+    from conftest import fake_linux_bundle_files
+    directory = tmp_path / "staged" / "Pense-bete"
+    for name, (data, mode) in fake_linux_bundle_files().items():
+        (directory / name).parent.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_bytes(data)
+        (directory / name).chmod(mode)
+    return directory
+
+
+def run_bundle_installer(home, bundle, *args):
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("XDG_", "PENSE_BETE_"))}
+    env["HOME"] = str(home)
+    result = subprocess.run(["bash", str(bundle / "install.sh"), "--yes", *args], env=env,
+                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_a_standalone_build_replaces_an_installation_with_python(home, linux_bundle):
+    target = home / "app"
+    install_sh(home, str(target))
+    assert (target / "pense_bete.py").exists()
+
+    run_bundle_installer(home, linux_bundle, "--commit=abc", "--release=v1.2.3", str(target))
+
+    assert not (target / "pense_bete.py").exists() and not (target / "pensebete").exists()
+    assert os.access(target / "pense-bete", os.X_OK)
+    assert (target / ".version").read_text().strip() == "abc"  # what is given wins
+    assert (target / ".release").read_text().strip() == "v1.2.3"
+
+
+def test_an_update_waits_for_the_application_then_cleans_up_and_relaunches(home,
+                                                                           linux_bundle):
+    import sys
+    import time
+    target = home / "app"
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"])
+    started = time.monotonic()
+
+    run_bundle_installer(home, linux_bundle, f"--waitpid={running.pid}", "--launch",
+                         "--removesource", str(target))
+
+    assert time.monotonic() - started >= 2  # it waited for the process to end
+    running.wait()
+    assert os.access(target / "pense-bete", os.X_OK)
+    assert not linux_bundle.exists()  # the unpacked download is gone
+    deadline = time.monotonic() + 5
+    while not (home / "launched").exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert (home / "launched").exists()
+
+
+def test_a_standalone_installation_is_uninstalled(home, linux_bundle):
+    target = home / "app"
+    run_bundle_installer(home, linux_bundle, str(target))
+
+    run_bundle_installer(home, target, "--uninstall")
+
+    assert not target.exists()
+    assert not desktop_file(home).exists()

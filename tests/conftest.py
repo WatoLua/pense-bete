@@ -168,6 +168,7 @@ def fake_github():
     of this working tree's files. Yields the API address and the release's commit."""
     import io
     import json
+    import tarfile
     import threading
     import zipfile
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -183,6 +184,12 @@ def fake_github():
     with zipfile.ZipFile(bundle, "w") as output:
         for name, data in fake_bundle_files().items():
             output.writestr(f"Pense-bete/{name}", data)
+    linux_bundle = io.BytesIO()
+    with tarfile.open(fileobj=linux_bundle, mode="w:gz") as output:
+        for name, (data, mode) in fake_linux_bundle_files(commit).items():
+            member = tarfile.TarInfo(f"pense-bete/{name}")
+            member.size, member.mode = len(data), mode
+            output.addfile(member, io.BytesIO(data))
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -199,6 +206,8 @@ def fake_github():
                                                "browser_download_url": f"{base}/bundle"}]}).encode()
             elif self.path == "/bundle":
                 body = bundle.getvalue()
+            elif self.path == "/releases/latest/download/pense-bete-linux.tar.gz":
+                body = linux_bundle.getvalue()
             else:
                 self.send_error(404)
                 return
@@ -225,4 +234,18 @@ def fake_bundle_files() -> dict[str, bytes]:
              "_internal/python312.dll": b"library"}
     for name in ("icon.svg", "icon.ico", "LICENSE", "install.ps1"):
         files[name] = (REPO_DIR / name).read_bytes()
+    return files
+
+
+def fake_linux_bundle_files(commit: str = "1a2b3c4d" * 5) -> dict[str, tuple[bytes, int]]:
+    """The Linux standalone build's files and permissions, its release recorded in it as
+    the build records it. Its executable only notes, in $HOME/launched, that it ran."""
+    files = {
+        "pense-bete": (b'#!/bin/sh\necho launched > "$HOME/launched"\n', 0o755),
+        "_internal/libpython3.12.so.1.0": (b"library", 0o644),
+        ".version": (f"{commit}\n".encode(), 0o644),
+        ".release": (b"v1.10.0\n", 0o644),
+    }
+    for name in ("icon.svg", "LICENSE", "install.sh"):
+        files[name] = ((REPO_DIR / name).read_bytes(), 0o755 if name == "install.sh" else 0o644)
     return files
