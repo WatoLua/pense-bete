@@ -21,6 +21,9 @@ python3 -m PyInstaller --noconfirm --clean --name pense-bete \
     --hidden-import PySide6.QtSvg --exclude-module tkinter \
     --distpath "$dist" --workpath "$root/build" --specpath "$root/build" \
     "$root/pense_bete.py"
+# GLib is the system's, as old as the build's or newer: GLib loads the system's own GIO
+# modules, such as gvfs, which an older GLib carried along would fail to load.
+rm -f -- "$app"/_internal/lib{glib,gobject,gio,gmodule,gthread}-2.0.so.0
 # Beside the executable, where the application and the installer look for them.
 cp -- "$root/icon.svg" "$root/LICENSE" "$root/install.sh" "$app/"
 chmod +x "$app/install.sh"
