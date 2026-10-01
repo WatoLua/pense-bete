@@ -50,8 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0  # --notes-from-tag reads the annotated tag
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -62,7 +60,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+        # --notes-from-tag reads the tag's message: the annotated tag itself is fetched,
+        # where actions/checkout leaves the ref it checks out as a lightweight tag.
         run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           gh release delete "$TAG" --yes 2>/dev/null || true
           gh release create "$TAG" dist/pense-bete-windows.zip dist/pense-bete-linux.tar.gz \
             --title "$TAG" --notes-from-tag --verify-tag
