@@ -194,6 +194,20 @@ def test_without_git_the_newest_release_comes_from_the_api(monkeypatch):
         "v1.10.0", "new", "zip/v1.10.0")
 
 
+def test_the_standalone_build_asks_the_api_even_where_git_is(monkeypatch):
+    monkeypatch.setattr(updates, "REPO_URL", "https://github.com/someone/pense-bete.git")
+    monkeypatch.setattr(updates, "FROZEN", True)
+    monkeypatch.setattr(updates, "git_available", lambda: True)
+    fetcher = fake_github({f"{API}/tags?per_page=100": [
+        {"name": "v1.10.0", "commit": {"sha": "new"}, "zipball_url": "zip/v1.10.0"},
+    ]})
+
+    def no_git(*args):
+        raise AssertionError(f"git was run: {args}")
+
+    assert updates.latest_release(no_git, fetcher) == ("v1.10.0", "new", "zip/v1.10.0")
+
+
 def test_without_git_a_repository_off_github_cannot_update(monkeypatch):
     monkeypatch.setattr(updates, "REPO_URL", "/srv/git/pense-bete.git")
     with pytest.raises(RuntimeError, match="git"):

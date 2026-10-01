@@ -323,6 +323,12 @@ function Check-Dependencies {
         return
     }
     $script:Python = Find-Python
+    # Where Python is installed, the standalone version can still be chosen: it needs
+    # neither that Python nor its packages, and downloads over HTTPS only.
+    if (-not $SourceDir -and -not $Standalone -and $Python -and
+            (AskNo (T "Python is installed. Install the standalone version anyway, which does not use it (about 40 MB)?" "Python est install\u00e9. Installer quand m\u00eame la version autonome, qui ne l'utilise pas (environ 40 Mo) ?"))) {
+        $script:Standalone = $true
+    }
     if (-not $SourceDir -and ($Standalone -or (-not $Python -and (AskYes (T "Python is not installed. Install the standalone version, which carries it (about 40 MB)?" "Python n'est pas install\u00e9. Installer la version autonome, qui l'inclut (environ 40 Mo) ?"))))) {
         $script:SourceDir = Join-Path ([IO.Path]::GetTempPath()) "pense-bete-$([guid]::NewGuid())"
         $script:Cleanup = $SourceDir

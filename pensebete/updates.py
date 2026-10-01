@@ -17,7 +17,9 @@ from typing import NamedTuple
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from .config import APP_DIR, RELEASE_FILE, REPO_URL, SUBPROCESS_OPTIONS, VERSION_FILE, WINDOWS
+from .config import (
+    APP_DIR, FROZEN, RELEASE_FILE, REPO_URL, SUBPROCESS_OPTIONS, VERSION_FILE, WINDOWS,
+)
 from .i18n import tr
 from .storage import remove_tree
 
@@ -82,9 +84,11 @@ def http_get(url: str) -> bytes:
 
 def latest_release(runner=run, fetcher=http_get, use_git: bool | None = None) -> Release | None:
     """The newest vX.Y.Z tag of the repository, None when it has none: through git, or
-    without it through the GitHub API."""
+    without it through the GitHub API. The standalone build always asks the API: it
+    updates from an archive over HTTPS, which goes through the system's proxy where
+    git, if the machine has one, may be blocked."""
     if use_git is None:
-        use_git = git_available()
+        use_git = git_available() and not FROZEN
     if not use_git:
         api = github_api()
         if not api:

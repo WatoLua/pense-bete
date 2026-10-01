@@ -206,8 +206,18 @@ entry in the taskbar, where it can be pinned.
 Without Python, it offers the **standalone version** instead: `Pense-bete.exe`,
 about 40 MB, with Python and PySide6 inside, nothing else to install. It is built
 for every release and attached to it on GitHub, a few minutes after the release
-is tagged. `-Standalone` asks for it even where Python is installed. The
-standalone version updates and uninstalls from its **⋮** menu as the other does:
+is tagged. Where Python is installed, the installer asks whether to install
+the standalone version anyway (default no); `-Standalone` chooses it without
+asking:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/WatoLua/pense-bete/main/install.ps1))) -Standalone
+```
+
+The standalone version downloads over HTTPS only, through the system's proxy,
+and looks for its updates the same way, even on a machine that has git: it
+suits office networks that let the browser out but not git. It updates and
+uninstalls from its **⋮** menu as the other does:
 since Windows cannot replace a running program, it closes, its installer puts
 the new files in place and starts it again. The installer's report is in
 `%TEMP%\pense-bete-install.log`.
